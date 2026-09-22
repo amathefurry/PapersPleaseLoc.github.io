@@ -1,4 +1,10 @@
-import fs from 'node:fs';
+import {
+	mkdir,
+	readFile,
+	readdir,
+	rm,
+	writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import Jimp from 'jimp';
 import { webkit } from 'playwright';
@@ -6,32 +12,20 @@ import {parseArgs} from 'node:util';
 import JSZip from 'jszip';
 
 // ---------------------------------------------------------------------------------------------------------------------
-function guaranteeDirSync(targetDir) {
-	if (!fs.existsSync(targetDir)) {
-		fs.mkdirSync(targetDir, { recursive: true });
-	}
+async function guaranteeDir(targetDir) {
+	await mkdir(targetDir, { recursive: true });
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-async function writeUtf8FileAsync(filename, contents) {
-	return new Promise(function (resolve, reject) {
-		guaranteeDirSync(path.dirname(filename));
-		fs.writeFile(filename, contents, 'utf8', function (err) {
-			if (err) { reject(err); }
-			else { resolve(); }
-		});
-	});
+async function writeUtf8File(filename, contents) {
+	await guaranteeDir(path.dirname(filename));
+	await writeFile(filename, contents, 'utf8');
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-async function writeBinaryFileAsync(filename, contents) {
-	return new Promise(function (resolve, reject) {
-		guaranteeDirSync(path.dirname(filename));
-		fs.writeFile(filename, contents, 'binary', function (err) {
-			if (err) { reject(err); }
-			else { resolve(); }
-		});
-	});
+async function writeBinaryFile(filename, contents) {
+	await guaranteeDir(path.dirname(filename));
+	await writeFile(filename, contents);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -275,27 +269,29 @@ function progress(name, i, count) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-function addToZip(root, dir, zip) {
-	for (const filename of fs.readdirSync(dir)) {
-		const fullPath = path.join(dir, filename);
+async function addToZip(root, dir, zip) {
+	const entries = await readdir(dir, { withFileTypes: true });
 
-		if (fs.statSync(fullPath).isDirectory()) {
-			addToZip(root, fullPath, zip);
+	for (const entry of entries) {
+		const fullPath = path.join(dir, entry.name);
+
+		if (entry.isDirectory()) {
+			await addToZip(root, fullPath, zip);
 			continue;
 		}
 
 		const archivePath = path.relative(root, fullPath).split(path.sep).join('/');
-		zip.file(archivePath, fs.readFileSync(fullPath));
+		zip.file(archivePath, await readFile(fullPath));
 	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
 async function makeZip(dir, outputFilename) {
 	const zip = new JSZip();
-	addToZip(dir, dir, zip);
+	await addToZip(dir, dir, zip);
 
 	const data = await zip.generateAsync({ type: 'nodebuffer' });
-	fs.writeFileSync(outputFilename, data);
+	await writeFile(outputFilename, data);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -337,14 +333,14 @@ async function capture(page, scale, makeFonts, dir, csv) {
 		console.log(progress('Data   ', i, dataFiles.length) + ' ' + dataFile.filename);
 		if (dataFile.dataType == 'url') {
 			const data = await loadBinaryAtUrl(page, dataFile.contents);
-			if (data != null) { await writeBinaryFileAsync(path.join(dir, dataFile.filename), data); }
+			if (data != null) { await writeBinaryFile(path.join(dir, dataFile.filename), data); }
 		}
 		else if (dataFile.dataType == 'dataURL') {
 			const buffer = Buffer.from(dataFile.contents.split(',', 2)[1], 'base64');
-			await writeBinaryFileAsync(path.join(dir, dataFile.filename), buffer);
+			await writeBinaryFile(path.join(dir, dataFile.filename), buffer);
 		}
 		else {
-			await writeUtf8FileAsync(path.join(dir, dataFile.filename), dataFile.contents);
+			await writeUtf8File(path.join(dir, dataFile.filename), dataFile.contents);
 		}
 	}
 
@@ -359,7 +355,7 @@ async function capture(page, scale, makeFonts, dir, csv) {
 		console.log(progress('Image', i, images.length) + ' ' + image.filename + ' (' + image.w + 'x' + image.h + ')' + (image.quantizeRects.length ? ' PAL' : '') + (image.baked ? ' BAKED' : ''));
 
 		const filename = path.join(dir, image.filename);
-		guaranteeDirSync(path.dirname(filename));
+		await guaranteeDir(path.dirname(filename));
 
 		// isolate element and capture page
 		await page.evaluate(function (imageId) {
@@ -450,7 +446,6 @@ function attachRequestTracker(context) {
 	});
 
 	if (args.csv == null || args.url == null || args.out == null) { showUsage(); }
-	if (!fs.existsSync(args.csv)) { abortWithError('File not found: ' + args.csv); }
 
 	const url = args.url;
 
@@ -491,11 +486,20 @@ function attachRequestTracker(context) {
 	const code = path.parse(args.csv).name;
 
 	const dir = path.join(args.out, '__tmp__' + code);
-	if (fs.existsSync(dir)) {
-		fs.rmSync(dir, { recursive: true, force: true });
-	}
+	await rm(dir, { recursive: true, force: true });
 
-	const csv = fs.readFileSync(args.csv, 'utf8');
+	let csv;
+
+	try {
+		csv = await readFile(args.csv, 'utf8');
+	}
+	catch (error) {
+		if (error.code === 'ENOENT') {
+			abortWithError('File not found: ' + args.csv);
+		}
+
+		throw error;
+	}
 
 	const lang = await capture(page, 1, args.makeFonts, dir, csv);
 	await browser.close();
