@@ -1,9 +1,9 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const Jimp = require('jimp');
-const playwright = require('playwright');
-const minimist = require('minimist');
-require('node-zip');
+import fs from 'node:fs';
+import path from 'node:path';
+import Jimp from 'jimp';
+import { webkit } from 'playwright';
+import minimist from 'minimist';
+import 'node-zip';
 
 // ---------------------------------------------------------------------------------------------------------------------
 function guaranteeDirSync(targetDir) {
@@ -440,7 +440,7 @@ function attachRequestTracker(context) {
 
 	const url = args.url;
 
-	const browser = await playwright.webkit.launch();
+	const browser = await webkit.launch();
 	const context = await browser.newContext();
 
 	context.on('requestfailed', (request) => {
