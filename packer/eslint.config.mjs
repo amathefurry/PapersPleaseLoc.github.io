@@ -1,3 +1,4 @@
+/* eslint-disable n/no-unpublished-import */
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
 import node from 'eslint-plugin-n';
