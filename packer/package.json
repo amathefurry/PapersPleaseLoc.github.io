@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "<Papers, Please> localization package builder",
   "main": "index.js",
+  "type": "module",
   "scripts": {},
   "repository": {
     "type": "git",
@@ -22,5 +23,14 @@
   },
   "engines": {
     "node": ">=17.6.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "eslint": "^10.11.0",
+    "eslint-plugin-n": "^18.3.0",
+    "eslint-plugin-promise": "^7.3.0",
+    "eslint-plugin-unicorn": "^76.0.0",
+    "globals": "^17.12.0"
   }
 }
