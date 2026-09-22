@@ -18,7 +18,6 @@
   "dependencies": {
     "jimp": "^0.16.0",
     "jszip": "^3.10.2",
-    "minimist": "^1.2.5",
     "playwright": "^1.25.0"
   },
   "engines": {

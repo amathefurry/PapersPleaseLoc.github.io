@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Jimp from 'jimp';
 import { webkit } from 'playwright';
-import minimist from 'minimist';
+import {parseArgs} from 'node:util';
 import JSZip from 'jszip';
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -427,10 +427,26 @@ function attachRequestTracker(context) {
 	const timerId = 'Finished in';
 	console.time(timerId);
 
-	const args = minimist(process.argv.slice(2), {
-		string: ['csv', 'url', 'out'],
-		boolean: ['makeFonts'],
-		unknown(a) { console.error('Unknown argument: ' + a); return false; },
+	const {
+		values: args,
+	} = parseArgs({
+		options: {
+			csv: {
+				type: 'string',
+			},
+			url: {
+				type: 'string',
+			},
+			out: {
+				type: 'string',
+			},
+			makeFonts: {
+				type: 'boolean',
+				default: false,
+			},
+		},
+		strict: true,
+		allowPositionals: false,
 	});
 
 	if (args.csv == null || args.url == null || args.out == null) { showUsage(); }
