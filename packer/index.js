@@ -3,7 +3,7 @@ import path from 'node:path';
 import Jimp from 'jimp';
 import { webkit } from 'playwright';
 import minimist from 'minimist';
-import 'node-zip';
+import JSZip from 'jszip';
 
 // ---------------------------------------------------------------------------------------------------------------------
 function guaranteeDirSync(targetDir) {
@@ -276,28 +276,26 @@ function progress(name, i, count) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 function addToZip(root, dir, zip) {
-	const filenames = fs.readdirSync(dir);
+	for (const filename of fs.readdirSync(dir)) {
+		const fullPath = path.join(dir, filename);
 
-	for (let i = 0; i < filenames.length; i++) {
-		const filename = filenames[i];
-		const fullpath = path.join(dir, filename);
-		if (fs.statSync(fullpath).isDirectory()) {
-			addToZip(root, fullpath, zip);
+		if (fs.statSync(fullPath).isDirectory()) {
+			addToZip(root, fullPath, zip);
+			continue;
 		}
-		else {
-			let mappedDir = dir.replace(root, '').replace('\\', '/');
-			if (mappedDir.startsWith('/')) { mappedDir = mappedDir.slice(1); }
-			zip.folder(mappedDir).file(filename, fs.readFileSync(fullpath));
-		}
+
+		const archivePath = path.relative(root, fullPath).split(path.sep).join('/');
+		zip.file(archivePath, fs.readFileSync(fullPath));
 	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-function makeZip(dir, outputFilename) {
+async function makeZip(dir, outputFilename) {
 	const zip = new JSZip();
 	addToZip(dir, dir, zip);
-	const data = zip.generate({ base64: false });
-	fs.writeFileSync(outputFilename, data, 'binary');
+
+	const data = await zip.generateAsync({ type: 'nodebuffer' });
+	fs.writeFileSync(outputFilename, data);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -488,7 +486,7 @@ function attachRequestTracker(context) {
 
 	const zipFilename = path.join(args.out, lang + '.zip');
 	console.log('Zipping: ' + zipFilename);
-	makeZip(dir, zipFilename);
+	await makeZip(dir, zipFilename);
 
 	console.timeEnd(timerId);
 })();
