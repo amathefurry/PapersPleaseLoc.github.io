@@ -7,6 +7,8 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import JSZip from 'jszip';
 
+import { ensureDirectory } from './files.js';
+
 /** @typedef {InstanceType<typeof JSZip>} JSZipArchive */
 
 /**
@@ -24,7 +26,7 @@ async function addDirectory(zip, root, directory) {
         withFileTypes: true,
     });
 
-    // Keep archive entry ordering deterministic across filesystems.
+    // Keep archive entry ordering stable instead of relying on filesystem order.
     entries.sort((a, b) => a.name.localeCompare(b.name));
 
     for (const entry of entries) {
@@ -72,6 +74,7 @@ export async function makeZip(directory, outputFilename) {
         directory,
         directory,
     );
+    await ensureDirectory(path.dirname(outputFilename));
 
     const archive = zip.generateNodeStream({
         streamFiles: true,
