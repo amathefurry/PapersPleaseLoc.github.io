@@ -1,5 +1,4 @@
 import {
-	mkdir,
 	readFile,
 	readdir,
 	rm,
@@ -11,6 +10,7 @@ import { Jimp } from 'jimp';
 import { webkit } from 'playwright';
 import { parseArgs } from 'node:util';
 import JSZip from 'jszip';
+import { ensureDirectory, writeBinaryFile, writeTextFile } from './files.js';
 
 /**
  * @typedef {import('playwright').Page} Page
@@ -113,40 +113,6 @@ import JSZip from 'jszip';
  *   },
  * }} CaptureGlobal
  */
-
-/**
- * Ensures that a directory exists, creating any missing parents as needed.
- *
- * @param {string} targetDir Directory path to create.
- * @returns {Promise<void>}
- */
-async function guaranteeDir(targetDir) {
-	await mkdir(targetDir, { recursive: true });
-}
-
-/**
- * Writes UTF-8 text after ensuring that the destination directory exists.
- *
- * @param {string} filename Destination filename.
- * @param {string} contents Text to write.
- * @returns {Promise<void>}
- */
-async function writeUtf8File(filename, contents) {
-	await guaranteeDir(path.dirname(filename));
-	await writeFile(filename, contents, 'utf8');
-}
-
-/**
- * Writes binary data after ensuring that the destination directory exists.
- *
- * @param {string} filename Destination filename.
- * @param {Buffer} contents Binary payload.
- * @returns {Promise<void>}
- */
-async function writeBinaryFile(filename, contents) {
-	await guaranteeDir(path.dirname(filename));
-	await writeFile(filename, contents);
-}
 
 /**
  * Fetches a binary resource from inside the browser page and converts it to a
@@ -586,7 +552,7 @@ async function capture(page, scale, makeFonts, dir, csv) {
 			await writeBinaryFile(path.join(dir, dataFile.filename), buffer);
 		}
 		else {
-			await writeUtf8File(path.join(dir, dataFile.filename), dataFile.contents);
+			await writeTextFile(path.join(dir, dataFile.filename), dataFile.contents);
 		}
 	}
 
@@ -601,7 +567,7 @@ async function capture(page, scale, makeFonts, dir, csv) {
 		console.log(progress('Image', i, images.length) + ' ' + image.filename + ' (' + image.w + 'x' + image.h + ')' + (image.quantizeRects.length ? ' PAL' : '') + (image.baked ? ' BAKED' : ''));
 
 		const filename = path.join(dir, image.filename);
-		await guaranteeDir(path.dirname(filename));
+		await ensureDirectory(path.dirname(filename));
 
 		// isolate element and capture page
 		await page.evaluate(function (imageId) {
