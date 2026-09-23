@@ -390,6 +390,125 @@ function downscale(image, step) {
 }
 
 /**
+ * Decodes a base64 data URL into a Node.js Buffer.
+ *
+ * @param {string} dataUrl Data URL containing base64-encoded contents.
+ * @returns {Buffer} Decoded binary data.
+ */
+function decodeDataUrl(dataUrl) {
+	// Everything before the first comma describes the payload. Everything after
+	// it is the encoded data itself.
+	const commaIndex = dataUrl.indexOf(',');
+
+	if (commaIndex === -1) {
+		throw new Error('Invalid data URL');
+	}
+
+	const metadata = dataUrl.slice(0, commaIndex);
+
+	// The localization capture API currently emits base64 data URLs. Reject
+	// other encodings instead of accidentally interpreting them as base64.
+	if (!metadata.endsWith(';base64')) {
+		throw new Error('Unsupported data URL encoding');
+	}
+
+	return Buffer.from(dataUrl.slice(commaIndex + 1), 'base64');
+}
+
+/**
+ * Writes one data file produced by the browser-side capture API.
+ *
+ * Depending on `dataType`, the contents are either fetched through the browser,
+ * decoded from a base64 data URL, or written directly as UTF-8 text.
+ *
+ * @param {Page} page Playwright page hosting the localization tool.
+ * @param {string} dir Root directory of the generated language pack.
+ * @param {CaptureDataFile} dataFile Capture-side file description.
+ * @returns {Promise<void>}
+ */
+async function writeDataFile(page, dir, dataFile) {
+	// Resolve the browser-provided path relative to the language-pack root and
+	// ensure it cannot escape that directory.
+	const filename = resolveOutputPath(dir, dataFile.filename);
+
+	switch (dataFile.dataType) {
+		case 'url': {
+			// Fetch through the page rather than Node so the request shares the
+			// page's origin, cookies, and browser session.
+			const data = await loadBinaryAtUrl(page, dataFile.contents);
+
+			if (data === null) {
+				throw new Error(`Failed to load ${dataFile.contents}`);
+			}
+
+			await writeBinaryFile(filename, data);
+			break;
+		}
+
+		case 'dataURL':
+			// Embedded assets are already available locally as base64 data URLs.
+			await writeBinaryFile(
+				filename,
+				decodeDataUrl(dataFile.contents),
+			);
+			break;
+
+		default:
+			// All remaining capture data is ordinary UTF-8 text.
+			await writeTextFile(filename, dataFile.contents);
+			break;
+	}
+}
+
+/**
+ * Captures one browser-side image and applies the game's image
+ * post-processing pipeline.
+ *
+ * @param {Page} page Playwright page hosting the localization tool.
+ * @param {number} scale Browser capture scale.
+ * @param {string} dir Root directory of the generated language pack.
+ * @param {CaptureImage} image Capture-side image description.
+ * @returns {Promise<void>}
+ */
+async function captureImage(page, scale, dir, image) {
+	// `image.filename` originates in browser-side capture data, so keep the
+	// resulting path constrained to the language-pack directory.
+	const filename = resolveOutputPath(dir, image.filename);
+
+	await ensureDirectory(path.dirname(filename));
+
+	// Hide everything except the requested capture element before taking the
+	// screenshot. This changes shared page state, so image capture is kept
+	// sequential rather than running multiple screenshots in parallel.
+	await page.evaluate((imageId) => {
+		const browser = /** @type {CaptureGlobal} */ (globalThis);
+		browser.$.capture.isolate(imageId);
+	}, image.id);
+
+	// Capture the image at the requested scale with a transparent background.
+	await page.screenshot({
+		path: filename,
+		clip: {
+			x: 0,
+			y: 0,
+			width: scale * image.w,
+			height: scale * image.h,
+		},
+		omitBackground: true,
+	});
+
+	// Convert the raw screenshot into the format expected by the game:
+	// quantization, alpha-key handling, optional cropping, and downscaling.
+	await finalizeImage(
+		filename,
+		image.w,
+		image.h,
+		image.quantizeRects,
+		image.wantAutoCrop,
+	);
+}
+
+/**
  * Applies the complete post-processing pipeline to a captured image: optional
  * cropping, palette quantization, alpha-key conversion, and pixel-art downscaling.
  * The processed image replaces the file on disk.
@@ -492,100 +611,77 @@ async function makeZip(dir, outputFilename) {
 }
 
 /**
- * Drives the browser-side capture API, writes all generated data files, captures
- * image elements, and post-processes those images for the final language pack.
+ * Drives the browser-side capture API, writes generated data files, captures
+ * image elements, and post-processes them for the language pack.
  *
  * @param {Page} page Playwright page containing `$.capture`.
  * @param {number} scale Browser capture scale.
- * @param {boolean} makeFonts Whether the capture tool should generate font assets.
- * @param {string} dir Output directory for the temporary language-pack tree.
+ * @param {boolean} makeFonts Whether font assets should be generated.
+ * @param {string} dir Temporary language-pack output directory.
  * @param {string} csv Contents of the input Loc.csv file.
  * @returns {Promise<string>} Language identifier reported by the capture tool.
  */
 async function capture(page, scale, makeFonts, dir, csv) {
 	console.log('Preparing page');
 
-	// begin capture with the input Loc.csv
-	const load = /** @type {CaptureLoadResult} */ (await page.evaluate(function (csvContents) {
-		const browser = /** @type {CaptureGlobal} */ (globalThis);
-		return browser.$.capture.load(csvContents);
-	}, csv));
+	const load = /** @type {CaptureLoadResult} */ (
+		await page.evaluate((csvContents) => {
+			const browser = /** @type {CaptureGlobal} */ (globalThis);
+			return browser.$.capture.load(csvContents);
+		}, csv)
+	);
 
 	if (load.error !== undefined) {
-		abortWithError(load.error);
+		throw new Error(load.error);
 	}
 
-	// Wait for all image/resource requests to finish loading.
 	const context = /** @type {TrackedBrowserContext} */ (page.context());
+
 	await context.requestsDone();
 
-	const begin = /** @type {CaptureBeginResult} */ (await page.evaluate(function (args) {
-		const browser = /** @type {CaptureGlobal} */ (globalThis);
-		return browser.$.capture.begin(
-			args.scale,
-			args.makeFonts,
-		);
-	}, { scale, makeFonts }));
+	const begin = /** @type {CaptureBeginResult} */ (
+		await page.evaluate((args) => {
+			const browser = /** @type {CaptureGlobal} */ (globalThis);
+
+			return browser.$.capture.begin(
+				args.scale,
+				args.makeFonts,
+			);
+		}, { scale, makeFonts })
+	);
 
 	if (begin.error !== undefined) {
-		abortWithError(begin.error);
+		throw new Error(begin.error);
 	}
 
-	const images = begin.images;
-	const dataFiles = begin.dataFiles;
+	console.log(`Language: ${begin.lang}`);
+	console.log(
+		`Packing ${begin.images.length} images `
+		+ `and ${begin.dataFiles.length} data files`,
+	);
 
-	console.log('Language: ' + begin.lang);
-	console.log('Packing ' + images.length + ' images and ' + dataFiles.length + ' data files');
+	for (const [index, dataFile] of begin.dataFiles.entries()) {
+		console.log(
+			`${progress('Data   ', index, begin.dataFiles.length)} `
+			+ dataFile.filename,
+		);
 
-	// write out all data files
-	for (let i = 0; i < dataFiles.length; i++) {
-		const dataFile = dataFiles[i];
-		const filename = resolveOutputPath(dir, dataFile.filename);
-
-		console.log(progress('Data   ', i, dataFiles.length) + ' ' + dataFile.filename);
-		if (dataFile.dataType === 'url') {
-			const data = await loadBinaryAtUrl(page, dataFile.contents);
-			if (data !== null) {
-				await writeBinaryFile(path.join(dir, filename), data);
-			}
-		}
-		else if (dataFile.dataType === 'dataURL') {
-			const buffer = Buffer.from(dataFile.contents.split(',', 2)[1], 'base64');
-			await writeBinaryFile(path.join(dir, filename), buffer);
-		}
-		else {
-			await writeTextFile(path.join(dir, filename), dataFile.contents);
-		}
+		await writeDataFile(page, dir, dataFile);
 	}
 
-	// write out all image files
-	for (let i = 0; i < images.length; i++) {
-		const image = images[i];
-		// if (image.id != "ApartmentClass") continue;
-		// if (image.id != "BulletinPagesNote") continue;
-		// if (image.id != "BulletinInnerTouchTut") continue;
-		// if (image.id != "ApartmentClass" && !image.id.startsWith("AccessPermit")) continue;
+	for (const [index, image] of begin.images.entries()) {
+		const flags = [
+			image.quantizeRects.length > 0 ? 'PAL' : null,
+			image.baked ? 'BAKED' : null,
+		].filter(Boolean);
 
-		console.log(progress('Image', i, images.length) + ' ' + image.filename + ' (' + image.w + 'x' + image.h + ')' + (image.quantizeRects.length ? ' PAL' : '') + (image.baked ? ' BAKED' : ''));
+		console.log(
+			`${progress('Image', index, begin.images.length)} `
+			+ `${image.filename} (${image.w}x${image.h})`
+			+ (flags.length > 0 ? ` ${flags.join(' ')}` : ''),
+		);
 
-		const filename = resolveOutputPath(dir, image.filename);
-		await ensureDirectory(path.dirname(filename));
-
-		// isolate element and capture page
-		await page.evaluate(function (imageId) {
-			const browser = /** @type {CaptureGlobal} */ (globalThis);
-			browser.$.capture.isolate(imageId);
-		}, image.id);
-
-		const options = {
-			path: filename,
-			clip: { x: 0, y: 0, width: scale * image.w, height: scale * image.h },
-			omitBackground: true,
-		};
-
-		await page.screenshot(options);
-
-		await finalizeImage(filename, image.w, image.h, image.quantizeRects, image.wantAutoCrop);
+		await captureImage(page, scale, dir, image);
 	}
 
 	return begin.lang;
