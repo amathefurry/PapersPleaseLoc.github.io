@@ -163,7 +163,6 @@ async function fixImageAlpha(image) {
 		const r = this.bitmap.data[i + 0];
 		const g = this.bitmap.data[i + 1];
 		const b = this.bitmap.data[i + 2];
-		const a = this.bitmap.data[i + 3];
 
 		if (r == 255 && g == 0 && b == 255) {
 			// fully transparent
@@ -343,7 +342,7 @@ function scaleRect(rect, scale) {
  * @returns {JimpImage} Newly allocated downscaled image.
  */
 function downscale(image, step) {
-	const downscaledImage = new Jimp(image.bitmap.width / step, image.bitmap.height / step, (err, image) => {
+	const downscaledImage = new Jimp(image.bitmap.width / step, image.bitmap.height / step, () => {
 		// this image is 256 x 256, every pixel is set to 0x00000000
 	});
 
@@ -684,7 +683,6 @@ function attachRequestTracker(context) {
 	});
 
 	console.log('Opening page: ' + url);
-	const status = await page.goto(url);
 
 	console.log('Loading csv from ' + args.csv);
 	const code = path.parse(args.csv).name;
