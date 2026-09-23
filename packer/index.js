@@ -6,6 +6,7 @@ import {
 	writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Jimp } from 'jimp';
 import { webkit } from 'playwright';
 import { parseArgs } from 'node:util';
@@ -29,8 +30,25 @@ import JSZip from 'jszip';
  * {@link attachRequestTracker}.
  */
 
-/** @typedef {import('jimp').Jimp} JimpImage */
 /** @typedef {InstanceType<typeof JSZip>} JSZipArchive */
+
+/**
+ * @typedef {object} PixelImage
+ * @property {{data: Buffer}} bitmap
+ * @property {number} width
+ * @property {number} height
+ * @property {(x?: number, y?: number, w?: number, h?: number) => Iterable<{
+ *   x: number,
+ *   y: number,
+ *   idx: number,
+ * }>} scanIterator
+ * @property {(options: {
+ *   x: number,
+ *   y: number,
+ *   w: number,
+ *   h: number,
+ * }) => unknown} crop
+ */
 
 /** @typedef {[number, number, number]} RGB */
 /** @typedef {[number, number, number]} XYZ */
@@ -82,6 +100,21 @@ import JSZip from 'jszip';
  */
 
 /**
+ * @typedef {object} CaptureApi
+ * @property {(csv: string) => CaptureLoadResult} load
+ * @property {(scale: number, makeFonts: boolean) => CaptureBeginResult} begin
+ * @property {(imageId: string) => void} isolate
+ */
+
+/**
+ * @typedef {typeof globalThis & {
+ *   $: {
+ *     capture: CaptureApi,
+ *   },
+ * }} CaptureGlobal
+ */
+
+/**
  * Ensures that a directory exists, creating any missing parents as needed.
  *
  * @param {string} targetDir Directory path to create.
@@ -126,28 +159,18 @@ async function writeBinaryFile(filename, contents) {
  * HTTP response.
  */
 async function loadBinaryAtUrl(page, url) {
-	// https://github.com/puppeteer/puppeteer/issues/3722
-	async function getBinaryAsString() {
-		return page.evaluate((url) => {
-			return new Promise(async (resolve) => {
-				const reader = new FileReader();
-				const response = await globalThis.fetch(url).then((response) => {
-					return (response.ok) ? response : null;
-				});
-				if (response == null) {
-					resolve(null);
-				}
-				else {
-					const data = await response.blob();
-					reader.readAsBinaryString(data);
-					reader.addEventListener('load', () => resolve(reader.result));
-					reader.onerror = () => reject('Error occurred while reading binary string');
-				}
-			});
-		}, url);
-	}
-	const str = await getBinaryAsString();
-	return (str == null) ? null : Buffer.from(str, 'binary');
+	// Fetch inside the page so the request uses the browser's session and origin.
+	const bytes = await page.evaluate(async (resourceUrl) => {
+		const response = await fetch(resourceUrl);
+		if (!response.ok) {
+			return null;
+		}
+
+		const buffer = await response.arrayBuffer();
+		return [...new Uint8Array(buffer)];
+	}, url);
+
+	return bytes === null ? null : Buffer.from(bytes);
 }
 
 /**
@@ -155,27 +178,25 @@ async function loadBinaryAtUrl(page, url) {
  * Magenta (0xff00ff) becomes transparent and dark magenta (0x7f007f) becomes a
  * 50% black shadow.
  *
- * @param {JimpImage} image Image to modify in place.
- * @returns {Promise<void>}
+ * @param {PixelImage} image Image to modify in place.
+ * @returns {void}
  */
-async function fixImageAlpha(image) {
-	await image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, i) {
-		const r = this.bitmap.data[i + 0];
-		const g = this.bitmap.data[i + 1];
-		const b = this.bitmap.data[i + 2];
+function fixImageAlpha(image) {
+	for (const { idx } of image.scanIterator()) {
+		const r = image.bitmap.data[idx + 0];
+		const g = image.bitmap.data[idx + 1];
+		const b = image.bitmap.data[idx + 2];
 
-		if (r == 255 && g == 0 && b == 255) {
-			// fully transparent
-			this.bitmap.data[i + 3] = 0;
+		if (r === 255 && g === 0 && b === 255) {
+			image.bitmap.data[idx + 3] = 0;
 		}
-		else if (r == 127 && g == 0 && b == 127) {
-			// 50% black shadow
-			this.bitmap.data[i + 0] = 0;
-			this.bitmap.data[i + 1] = 0;
-			this.bitmap.data[i + 2] = 0;
-			this.bitmap.data[i + 3] = 127;
+		else if (r === 127 && g === 0 && b === 127) {
+			image.bitmap.data[idx + 0] = 0;
+			image.bitmap.data[idx + 1] = 0;
+			image.bitmap.data[idx + 2] = 0;
+			image.bitmap.data[idx + 3] = 127;
 		}
-	});
+	}
 }
 
 // http://stackoverflow.com/questions/15408522/rgb-to-xyz-and-lab-colours-conversion
@@ -202,24 +223,24 @@ function RGBtoLAB(rgb) {
  * @returns {XYZ}
  */
 function RGBtoXYZ(R, G, B) {
-	// used for color quantization
-	var_R = Number.parseFloat(R / 255); // R from 0 to 255
-	var_G = Number.parseFloat(G / 255); // G from 0 to 255
-	var_B = Number.parseFloat(B / 255); // B from 0 to 255
+	// Normalize sRGB components and linearize them before applying the D65 matrix.
+	let r = R / 255;
+	let g = G / 255;
+	let b = B / 255;
 
-	var_R = var_R > 0.04045 ? Math.pow((var_R + 0.055) / 1.055, 2.4) : var_R / 12.92;
-	var_G = var_G > 0.04045 ? Math.pow((var_G + 0.055) / 1.055, 2.4) : var_G / 12.92;
-	var_B = var_B > 0.04045 ? Math.pow((var_B + 0.055) / 1.055, 2.4) : var_B / 12.92;
+	r = r > 0.04045 ? ((r + 0.055) / 1.055) ** 2.4 : r / 12.92;
+	g = g > 0.04045 ? ((g + 0.055) / 1.055) ** 2.4 : g / 12.92;
+	b = b > 0.04045 ? ((b + 0.055) / 1.055) ** 2.4 : b / 12.92;
 
-	var_R = var_R * 100;
-	var_G = var_G * 100;
-	var_B = var_B * 100;
+	r *= 100;
+	g *= 100;
+	b *= 100;
 
-	// Observer. = 2°, Illuminant = D65
-	X = var_R * 0.4124 + var_G * 0.3576 + var_B * 0.1805;
-	Y = var_R * 0.2126 + var_G * 0.7152 + var_B * 0.0722;
-	Z = var_R * 0.0193 + var_G * 0.1192 + var_B * 0.9505;
-	return [X, Y, Z];
+	// Observer = 2°, illuminant = D65.
+	const x = r * 0.4124 + g * 0.3576 + b * 0.1805;
+	const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+	const z = r * 0.0193 + g * 0.1192 + b * 0.9505;
+	return [x, y, z];
 }
 
 /**
@@ -231,71 +252,83 @@ function RGBtoXYZ(R, G, B) {
  * @returns {LAB}
  */
 function XYZtoLAB(x, y, z) {
-	// used for color quantization
-	const ref_X = 95.047;
-	const ref_Y = 100;
-	const ref_Z = 108.883;
+	const refX = 95.047;
+	const refY = 100;
+	const refZ = 108.883;
 
-	var_X = x / ref_X; // ref_X =  95.047   Observer= 2°, Illuminant= D65
-	var_Y = y / ref_Y; // ref_Y = 100.000
-	var_Z = z / ref_Z; // ref_Z = 108.883
+	let normalizedX = x / refX;
+	let normalizedY = y / refY;
+	let normalizedZ = z / refZ;
 
-	var_X = var_X > 0.008856 ? Math.pow(var_X, (1 / 3)) : (7.787 * var_X) + (16 / 116);
-	var_Y = var_Y > 0.008856 ? Math.pow(var_Y, (1 / 3)) : (7.787 * var_Y) + (16 / 116);
-	var_Z = var_Z > 0.008856 ? Math.pow(var_Z, (1 / 3)) : (7.787 * var_Z) + (16 / 116);
+	normalizedX = normalizedX > 0.008856
+		? normalizedX ** (1 / 3)
+		: 7.787 * normalizedX + 16 / 116;
+	normalizedY = normalizedY > 0.008856
+		? normalizedY ** (1 / 3)
+		: 7.787 * normalizedY + 16 / 116;
+	normalizedZ = normalizedZ > 0.008856
+		? normalizedZ ** (1 / 3)
+		: 7.787 * normalizedZ + 16 / 116;
 
-	CIE_L = (116 * var_Y) - 16;
-	CIE_a = 500 * (var_X - var_Y);
-	CIE_b = 200 * (var_Y - var_Z);
+	const lightness = 116 * normalizedY - 16;
+	const a = 500 * (normalizedX - normalizedY);
+	const b = 200 * (normalizedY - normalizedZ);
 
-	return [CIE_L, CIE_a, CIE_b];
+	return [lightness, a, b];
 }
 
 /**
  * Quantizes a rectangular image region to the nearest color in a fixed palette.
  * Distance is measured in CIE L*a*b* space.
  *
- * @param {JimpImage} image Image to modify in place.
+ * @param {PixelImage} image Image to modify in place.
  * @param {Rect} rect Region to quantize.
  * @param {RGB[]} colors Allowed RGB palette.
- * @returns {Promise<void>}
+ * @returns {void}
  */
-async function quantizeImage(image, rect, colors) {
-	// quantize pixels in rect to available colors
-	const palLab = [];
-	for (let i = 0; i < colors.length; i++) {
-		palLab.push(RGBtoLAB(colors[i]));
-	}
-	await image.scan(rect.x, rect.y, rect.width, rect.height, function (x, y, i) {
-		const r = this.bitmap.data[i + 0];
-		const g = this.bitmap.data[i + 1];
-		const b = this.bitmap.data[i + 2];
+function quantizeImage(image, rect, colors) {
+	/** @type {LAB[]} */
+	const palLab = colors.map(RGBtoLAB);
+
+	for (const { idx } of image.scanIterator(
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+	)) {
+		const r = image.bitmap.data[idx + 0];
+		const g = image.bitmap.data[idx + 1];
+		const b = image.bitmap.data[idx + 2];
+
 		const rgbLab = RGBtoLAB([r, g, b]);
 
 		let minDist = 0xFF_FF_FF;
 		let minP = 0;
+
 		for (let p = 0; p < palLab.length; p++) {
-			const dist = Math.sqrt(
-				(palLab[p][0] - rgbLab[0]) * (palLab[p][0] - rgbLab[0])
-				+ (palLab[p][1] - rgbLab[1]) * (palLab[p][1] - rgbLab[1])
-				+ (palLab[p][2] - rgbLab[2]) * (palLab[p][2] - rgbLab[2]),
+			const dist = Math.hypot(
+				palLab[p][0] - rgbLab[0],
+				palLab[p][1] - rgbLab[1],
+				palLab[p][2] - rgbLab[2],
 			);
+
 			if (dist < minDist) {
 				minDist = dist;
 				minP = p;
 			}
 		}
-		this.bitmap.data[i + 0] = colors[minP][0];
-		this.bitmap.data[i + 1] = colors[minP][1];
-		this.bitmap.data[i + 2] = colors[minP][2];
-	});
+
+		image.bitmap.data[idx + 0] = colors[minP][0];
+		image.bitmap.data[idx + 1] = colors[minP][1];
+		image.bitmap.data[idx + 2] = colors[minP][2];
+	}
 }
 
 /**
  * Crops transparent borders while preserving every pixel whose alpha is greater
  * than 1. The image is modified in place.
  *
- * @param {JimpImage} image Image to crop.
+ * @param {PixelImage} image Image to crop.
  * @returns {void}
  */
 function autocropImage(image) {
@@ -305,19 +338,22 @@ function autocropImage(image) {
 	let y0 = 10_000;
 	let y1 = -10_000;
 
-	image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, i) {
-		const a = this.bitmap.data[i + 3];
-		if (!(a > 1)) {
-			return;
+	for (const { x, y, idx } of image.scanIterator()) {
+		const alpha = image.bitmap.data[idx + 3];
+
+		if (alpha <= 1) {
+			continue;
 		}
 
 		x0 = Math.min(x0, x);
 		x1 = Math.max(x1, x);
 		y0 = Math.min(y0, y);
 		y1 = Math.max(y1, y);
-	});
+	}
 
-	if (x1 > x0 && y1 > y0) { image.crop(x0, y0, x1 - x0 + 1, y1 - y0 + 1); }
+	if (x1 > x0 && y1 > y0) {
+		image.crop({ x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+	}
 }
 
 /**
@@ -336,38 +372,48 @@ function scaleRect(rect, scale) {
  * by `step` source block. This preserves hard-edged pixel-art palettes better
  * than interpolation.
  *
- * @param {JimpImage} image Source image.
+ * @param {PixelImage} image Source image.
  * @param {number} step Number of source pixels represented by one output pixel
  * on each axis.
- * @returns {JimpImage} Newly allocated downscaled image.
+ * @returns Newly allocated downscaled image.
  */
 function downscale(image, step) {
-	const downscaledImage = new Jimp(image.bitmap.width / step, image.bitmap.height / step, () => {
-		// this image is 256 x 256, every pixel is set to 0x00000000
+	const downscaledImage = new Jimp({
+		width: image.width / step,
+		height: image.height / step,
+		color: 0x00_00_00_00,
 	});
 
-	for (let dy = 0; dy < downscaledImage.bitmap.height; dy++) {
-		for (let dx = 0; dx < downscaledImage.bitmap.width; dx++) {
-			const colorCounts = {};
+	for (let dy = 0; dy < downscaledImage.height; dy++) {
+		for (let dx = 0; dx < downscaledImage.width; dx++) {
+			/** @type {Map<number, number>} */
+			const colorCounts = new Map();
+
 			let bestColor = 0;
 			let bestColorCount = 0;
+
 			for (let sy = dy * step; sy < (dy + 1) * step; sy++) {
 				for (let sx = dx * step; sx < (dx + 1) * step; sx++) {
-					const si = (sy * image.bitmap.width + sx) * 4;
+					const si = (sy * image.width + sx) * 4;
+
 					const r = image.bitmap.data[si + 0];
 					const g = image.bitmap.data[si + 1];
 					const b = image.bitmap.data[si + 2];
 					const a = image.bitmap.data[si + 3];
+
 					const p = (r << 24) | (g << 16) | (b << 8) | a;
-					if (p in colorCounts) { colorCounts[p] += 1; }
-					else { colorCounts[p] = 1; }
-					if (colorCounts[p] > bestColorCount) {
+
+					const count = (colorCounts.get(p) ?? 0) + 1;
+					colorCounts.set(p, count);
+
+					if (count > bestColorCount) {
 						bestColor = p;
-						bestColorCount = colorCounts[p];
+						bestColorCount = count;
 					}
 				}
 			}
-			const di = ((dy * downscaledImage.bitmap.width) + dx) * 4;
+
+			const di = ((dy * downscaledImage.width) + dx) * 4;
 			downscaledImage.bitmap.data[di + 0] = ((bestColor >> 24) & 0xFF);
 			downscaledImage.bitmap.data[di + 1] = ((bestColor >> 16) & 0xFF);
 			downscaledImage.bitmap.data[di + 2] = ((bestColor >> 8) & 0xFF);
@@ -390,38 +436,35 @@ function downscale(image, step) {
  * @returns {Promise<void>}
  */
 async function finalizeImage(filename, width, height, quantizeRects, wantAutoCrop) {
-	// load and shrink
-	let image = await new Promise(function (resolve, reject) {
-		Jimp.read(filename, function (err, img) {
-			if (err) { reject(err); }
+	// Load the captured PNG before applying the post-processing pipeline.
+	const image = await Jimp.read(filename);
 
-			if (wantAutoCrop) {
-				autocropImage(img);
-			}
-
-			if (width != img.bitmap.width || height != img.bitmap.height) {
-				// img = img.resize(width, height, Jimp.RESIZE_NEAREST_NEIGHBOR);
-			}
-
-			resolve(img);
-		});
-	});
+	if (wantAutoCrop) {
+		autocropImage(image);
+	}
 
 	// quantize areas if necessary
 	for (let i = 0; i < quantizeRects.length; i++) {
-		const scaledRect = scaleRect(quantizeRects[i].rect, image.bitmap.width / width);
-		await quantizeImage(image, scaledRect, quantizeRects[i].colors);
+		const scaledRect = scaleRect(quantizeRects[i].rect, image.width / width);
+		quantizeImage(image, scaledRect, quantizeRects[i].colors);
 	}
 
 	// convert 0xff00ff -> transparent and 0x800080 -> shadow
-	await fixImageAlpha(image);
+	fixImageAlpha(image);
 
-	if (width != image.width || height != image.height) {
-		image = await downscale(image, image.bitmap.width / width);
+	if (width !== image.width || height !== image.height) {
+		const downscaledImage = downscale(image, image.width / width);
+
+		await downscaledImage.write(
+			/** @type {`${string}.${string}`} */(filename),
+		);
+
+		return;
 	}
 
-	// overwrite original file
-	await image.write(filename);
+	await image.write(
+		/** @type {`${string}.${string}`} */(filename),
+	);
 }
 
 /**
@@ -434,7 +477,9 @@ async function finalizeImage(filename, width, height, quantizeRects, wantAutoCro
  */
 function progress(name, i, count) {
 	let si = (i + 1).toString();
-	while (si.length < 3) { si = ' ' + si; }
+	while (si.length < 3) {
+		si = ' ' + si;
+	}
 	const sc = count.toString();
 	// while (sc.length < 3) sc = " " + sc;
 	return '[' + name + ' ' + si + '/' + sc + ']';
@@ -495,20 +540,30 @@ async function capture(page, scale, makeFonts, dir, csv) {
 	console.log('Preparing page');
 
 	// begin capture with the input Loc.csv
-	const load = await page.evaluate(function (a) {
-		return $.capture.load(a);
-	}, csv);
+	const load = /** @type {CaptureLoadResult} */ (await page.evaluate(function (csvContents) {
+		const browser = /** @type {CaptureGlobal} */ (globalThis);
+		return browser.$.capture.load(csvContents);
+	}, csv));
 
-	if (load.error !== undefined) { abortWithError(load.error); }
+	if (load.error !== undefined) {
+		abortWithError(load.error);
+	}
 
-	// wait for all image/resource requests for finish loading
-	await page.context().requestsDone();
+	// Wait for all image/resource requests to finish loading.
+	const context = /** @type {TrackedBrowserContext} */ (page.context());
+	await context.requestsDone();
 
-	const begin = await page.evaluate(await function (args) {
-		return $.capture.begin(args.scale, args.makeFonts);
-	}, { scale, makeFonts });
+	const begin = /** @type {CaptureBeginResult} */ (await page.evaluate(function (args) {
+		const browser = /** @type {CaptureGlobal} */ (globalThis);
+		return browser.$.capture.begin(
+			args.scale,
+			args.makeFonts,
+		);
+	}, { scale, makeFonts }));
 
-	if (begin.error !== undefined) { abortWithError(begin.error); }
+	if (begin.error !== undefined) {
+		abortWithError(begin.error);
+	}
 
 	const images = begin.images;
 	const dataFiles = begin.dataFiles;
@@ -517,14 +572,16 @@ async function capture(page, scale, makeFonts, dir, csv) {
 	console.log('Packing ' + images.length + ' images and ' + dataFiles.length + ' data files');
 
 	// write out all data files
-	for (var i = 0; i < dataFiles.length; i++) {
+	for (let i = 0; i < dataFiles.length; i++) {
 		const dataFile = dataFiles[i];
 		console.log(progress('Data   ', i, dataFiles.length) + ' ' + dataFile.filename);
-		if (dataFile.dataType == 'url') {
+		if (dataFile.dataType === 'url') {
 			const data = await loadBinaryAtUrl(page, dataFile.contents);
-			if (data != null) { await writeBinaryFile(path.join(dir, dataFile.filename), data); }
+			if (data !== null) {
+				await writeBinaryFile(path.join(dir, dataFile.filename), data);
+			}
 		}
-		else if (dataFile.dataType == 'dataURL') {
+		else if (dataFile.dataType === 'dataURL') {
 			const buffer = Buffer.from(dataFile.contents.split(',', 2)[1], 'base64');
 			await writeBinaryFile(path.join(dir, dataFile.filename), buffer);
 		}
@@ -534,7 +591,7 @@ async function capture(page, scale, makeFonts, dir, csv) {
 	}
 
 	// write out all image files
-	for (var i = 0; i < images.length; i++) {
+	for (let i = 0; i < images.length; i++) {
 		const image = images[i];
 		// if (image.id != "ApartmentClass") continue;
 		// if (image.id != "BulletinPagesNote") continue;
@@ -548,7 +605,8 @@ async function capture(page, scale, makeFonts, dir, csv) {
 
 		// isolate element and capture page
 		await page.evaluate(function (imageId) {
-			$.capture.isolate(imageId);
+			const browser = /** @type {CaptureGlobal} */ (globalThis);
+			browser.$.capture.isolate(imageId);
 		}, image.id);
 
 		const options = {
@@ -601,114 +659,124 @@ function abortWithError(err) {
 function attachRequestTracker(context) {
 	context.requestCount = 0;
 	const requestTracker = {
-		request() { context.requestCount++; }, // console.log(`request (${page.requestCount})`); },
-		requestfailed() { context.requestCount--; }, // console.log(`requestfailed (${page.requestCount})`); },
-		requestfinished() { context.requestCount--; }, // console.log(`requestfinished (${page.requestCount})`); },
+		request() {
+			context.requestCount++;
+		},
+		requestfailed() {
+			context.requestCount--;
+		},
+		requestfinished() {
+			context.requestCount--;
+		},
 	};
 
 	context.on('request', requestTracker.request);
 	context.on('requestfailed', requestTracker.requestfailed);
 	context.on('requestfinished', requestTracker.requestfinished);
 
-	context.requestsDone = function () {
-		return new Promise(function (resolve) {
-			function f() {
-				if (context.requestCount == 0) { resolve(); }
-				else { setTimeout(f, 10); }
-			}
-			f();
-		});
+	context.requestsDone = async function () {
+		while (context.requestCount !== 0) {
+			await delay(10);
+		}
 	};
 }
 
 // Main
-(async function () {
-	const timerId = 'Finished in';
-	console.time(timerId);
+const timerId = 'Finished in';
+console.time(timerId);
 
-	const {
-		values: args,
-	} = parseArgs({
-		options: {
-			csv: {
-				type: 'string',
-			},
-			url: {
-				type: 'string',
-			},
-			out: {
-				type: 'string',
-			},
-			makeFonts: {
-				type: 'boolean',
-				default: false,
-			},
+const {
+	values: args,
+} = parseArgs({
+	options: {
+		csv: {
+			type: 'string',
 		},
-		strict: true,
-		allowPositionals: false,
-	});
+		url: {
+			type: 'string',
+		},
+		out: {
+			type: 'string',
+		},
+		makeFonts: {
+			type: 'boolean',
+			default: false,
+		},
+	},
+	strict: true,
+	allowPositionals: false,
+});
 
-	if (args.csv == null || args.url == null || args.out == null) { showUsage(); }
+if (args.csv === undefined || args.url === undefined || args.out === undefined) {
+	showUsage();
+}
 
-	const url = args.url;
+const url = args.url;
 
-	const browser = await webkit.launch();
-	const context = /** @type {TrackedBrowserContext} */ await browser.newContext();
+const browser = await webkit.launch();
+const context = /** @type {TrackedBrowserContext} */ (await browser.newContext());
+const page = await context.newPage();
 
-	context.on('requestfailed', (request) => {
-		console.log(`url: ${request.url()}, errText: ${request.failure().errorText}, method: ${request.method()}`);
-	});
-	context.on('pageerror', (err) => {
-		console.log(`Page error: ${err.toString()}`);
-	});
+context.on('requestfailed', (request) => {
+	const failure = request.failure();
 
-	attachRequestTracker(context);
+	console.log(
+		`url: ${request.url()}, `
+		+ `errText: ${failure?.errorText ?? 'unknown'}, `
+		+ `method: ${request.method()}`,
+	);
+});
 
-	const page = await context.newPage();
+page.on('pageerror', (error) => {
+	console.log(`Page error: ${error}`);
+});
 
-	page.on('console', (message) => {
-		const messageText = message.text();
-		const messageType = message.type().slice(0, 3).toUpperCase();
-		const messageUrl = message.location() ? message.location().url : '';
+attachRequestTracker(context);
 
-		if (message.type() == 'error' && messageText.includes('404') && messageUrl.includes('/baked/')) {
-			// ignore 404 errors on baked images
-		}
-		else if (messageUrl.length > 0) {
-			console.log(`${messageType} ${messageText} (${messageUrl})`);
-		}
-		else {
-			console.log(`${messageType} ${messageText}`);
-		}
-	});
+page.on('console', (message) => {
+	const messageText = message.text();
+	const messageType = message.type().slice(0, 3).toUpperCase();
+	const messageUrl = message.location() ? message.location().url : '';
 
-	console.log('Opening page: ' + url);
-
-	console.log('Loading csv from ' + args.csv);
-	const code = path.parse(args.csv).name;
-
-	const dir = path.join(args.out, '__tmp__' + code);
-	await rm(dir, { recursive: true, force: true });
-
-	let csv;
-
-	try {
-		csv = await readFile(args.csv, 'utf8');
+	if (message.type() === 'error' && messageText.includes('404') && messageUrl.includes('/baked/')) {
+		// ignore 404 errors on baked images
 	}
-	catch (error) {
-		if (error.code === 'ENOENT') {
-			abortWithError('File not found: ' + args.csv);
-		}
+	else if (messageUrl.length > 0) {
+		console.log(`${messageType} ${messageText} (${messageUrl})`);
+	}
+	else {
+		console.log(`${messageType} ${messageText}`);
+	}
+});
 
-		throw error;
+console.log('Opening page: ' + url);
+await page.goto(url);
+
+console.log('Loading csv from ' + args.csv);
+const code = path.parse(args.csv).name;
+
+const dir = path.join(args.out, '__tmp__' + code);
+await rm(dir, { recursive: true, force: true });
+
+let csv;
+
+try {
+	csv = await readFile(args.csv, 'utf8');
+}
+catch (error) {
+	const fileError = /** @type {NodeJS.ErrnoException} */ (error);
+	if (fileError.code === 'ENOENT') {
+		abortWithError('File not found: ' + args.csv);
 	}
 
-	const lang = await capture(page, 1, args.makeFonts, dir, csv);
-	await browser.close();
+	throw error;
+}
 
-	const zipFilename = path.join(args.out, lang + '.zip');
-	console.log('Zipping: ' + zipFilename);
-	await makeZip(dir, zipFilename);
+const lang = await capture(page, 1, args.makeFonts, dir, csv);
+await browser.close();
 
-	console.timeEnd(timerId);
-})();
+const zipFilename = path.join(args.out, lang + '.zip');
+console.log('Zipping: ' + zipFilename);
+await makeZip(dir, zipFilename);
+
+console.timeEnd(timerId);
