@@ -94,30 +94,18 @@ async function loadBinaryAtUrl(page, url) {
 }
 
 /**
- * Decodes a base64 data URL into a Node.js Buffer.
+ * Decodes a base64-encoded data URL into a Node.js Buffer.
  *
  * @param {string} dataUrl Data URL containing base64-encoded contents.
  * @returns {Buffer} Decoded binary data.
  */
 function decodeDataUrl(dataUrl) {
-    const commaIndex = dataUrl.indexOf(',');
-
-    if (commaIndex === -1) {
-        throw new Error('Invalid data URL');
+    const match = /^data:[^,];base64,(.*)$/s.exec(dataUrl);
+    if (!match) {
+        throw new Error('Unsupported data URL');
     }
 
-    const metadata = dataUrl.slice(0, commaIndex);
-
-    // The capture tool currently emits base64 data URLs. Reject other encodings
-    // rather than silently interpreting their payload as base64.
-    if (!metadata.endsWith(';base64')) {
-        throw new Error('Unsupported data URL encoding');
-    }
-
-    return Buffer.from(
-        dataUrl.slice(commaIndex + 1),
-        'base64',
-    );
+    return Buffer.from(match[1], 'base64');
 }
 
 /**
