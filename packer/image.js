@@ -143,10 +143,11 @@ function quantizeImage(image, rect, colors) {
     const paletteLab = colors.map(rgbToLab);
     const data = image.bitmap.data;
 
-    // Captured pixel art contains many repeated RGB values. Cache their Lab
-    // conversion so each distinct source color is converted at most once.
-    /** @type {Map<number, LAB>} */
-    const labCache = new Map();
+    // Repeated source colors are common in pixel art. Cache the final palette
+    // choice, not just the RGB-to-Lab conversion, so repeated pixels avoid the
+    // complete nearest-color search.
+    /** @type {Map<number, number>} */
+    const nearestColorCache = new Map();
 
     for (const { idx } of image.scanIterator(
         rect.x,
@@ -159,28 +160,30 @@ function quantizeImage(image, rect, colors) {
         const blue = data[idx + 2];
         const rgbKey = (red << 16) | (green << 8) | blue;
 
-        let pixelLab = labCache.get(rgbKey);
+        let nearestIndex = nearestColorCache.get(rgbKey);
 
-        if (pixelLab === undefined) {
-            pixelLab = rgbToLab([red, green, blue]);
-            labCache.set(rgbKey, pixelLab);
-        }
+        if (nearestIndex === undefined) {
+            const pixelLab = rgbToLab([red, green, blue]);
+            let nearestDistanceSquared = Infinity;
+            nearestIndex = 0;
 
-        let nearestIndex = 0;
-        let nearestDistanceSquared = Infinity;
+            for (let index = 0; index < paletteLab.length; index++) {
+                const deltaL = paletteLab[index][0] - pixelLab[0];
+                const deltaA = paletteLab[index][1] - pixelLab[1];
+                const deltaB = paletteLab[index][2] - pixelLab[2];
+                const distanceSquared = (
+                    deltaL * deltaL
+                    + deltaA * deltaA
+                    + deltaB * deltaB
+                );
 
-        for (let index = 0; index < paletteLab.length; index++) {
-            const deltaL = paletteLab[index][0] - pixelLab[0];
-            const deltaA = paletteLab[index][1] - pixelLab[1];
-            const deltaB = paletteLab[index][2] - pixelLab[2];
-            const distanceSquared = deltaL * deltaL + deltaA * deltaA + deltaB * deltaB;
-
-            // Comparing squared distances avoids an unnecessary square root
-            // while preserving exactly the same nearest-color ordering.
-            if (distanceSquared < nearestDistanceSquared) {
-                nearestDistanceSquared = distanceSquared;
-                nearestIndex = index;
+                if (distanceSquared < nearestDistanceSquared) {
+                    nearestDistanceSquared = distanceSquared;
+                    nearestIndex = index;
+                }
             }
+
+            nearestColorCache.set(rgbKey, nearestIndex);
         }
 
         data[idx] = colors[nearestIndex][0];
@@ -323,8 +326,9 @@ function downscale(image, step) {
                 }
             }
 
-            const outputIndex
-                = (outputY * output.width + outputX) * 4;
+            const outputIndex = (
+                (outputY * output.width + outputX) * 4
+            );
 
             outputData[outputIndex] = bestColor >>> 24;
             outputData[outputIndex + 1] = (bestColor >>> 16) & 0xFF;
@@ -398,18 +402,15 @@ export async function finalizeImage(
     // Convert 0xff00ff to transparent and 0x7f007f to a 50% black shadow.
     fixImageAlpha(image);
 
-    const outputFilename
-    /** @type {`${string}.${string}`} */ = (filename);
-
     if (captureScale > 1) {
         const output = downscale(image, captureScale);
         await output.write(
-            /** @type {`${string}.${string}`} */(outputFilename),
+            /** @type {`${string}.${string}`} */(filename),
         );
         return;
     }
 
     await image.write(
-    /** @type {`${string}.${string}`} */(outputFilename),
+        /** @type {`${string}.${string}`} */(filename),
     );
 }
