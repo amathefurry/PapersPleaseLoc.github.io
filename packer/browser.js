@@ -3,6 +3,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 /**
  * @typedef {import('playwright').BrowserContext} BrowserContext
  * @typedef {import('playwright').Page} Page
+ * @typedef {import('playwright').Request} Request
+ * @typedef {import('./progress.js').ProgressReporter} ProgressReporter
  */
 
 /**
@@ -19,14 +21,17 @@ import { setTimeout as delay } from 'node:timers/promises';
  * }}
  */
 export function createRequestTracker(context) {
-    let pendingRequests = 0;
+    /** @type {Set<Request>} */
+    const pendingRequests = new Set();
 
-    const onRequest = () => {
-        pendingRequests++;
+    /** @param {Request} request */
+    const onRequest = (request) => {
+        pendingRequests.add(request);
     };
 
-    const onRequestDone = () => {
-        pendingRequests = Math.max(0, pendingRequests - 1);
+    /** @param {Request} request */
+    const onRequestDone = (request) => {
+        pendingRequests.delete(request);
     };
 
     context.on('request', onRequest);
@@ -34,7 +39,7 @@ export function createRequestTracker(context) {
     context.on('requestfailed', onRequestDone);
 
     return {
-    /**
+        /**
          * Waits until all tracked requests have completed and the browser has
          * remained idle for a short period.
          *
@@ -55,7 +60,7 @@ export function createRequestTracker(context) {
             let idleSince = null;
 
             while (Date.now() < deadline) {
-                if (pendingRequests === 0) {
+                if (pendingRequests.size === 0) {
                     idleSince ??= Date.now();
 
                     if (Date.now() - idleSince >= quietMs) {
@@ -68,9 +73,16 @@ export function createRequestTracker(context) {
                 await delay(10);
             }
 
+            const pendingUrls = [...pendingRequests]
+                .slice(0, 3)
+                .map(request => request.url());
+            const details = pendingUrls.length > 0
+                ? `: ${pendingUrls.join(', ')}`
+                : '';
+
             throw new Error(
                 `Timed out waiting for browser requests `
-                + `(${pendingRequests} still pending)`,
+                + `(${pendingRequests.size} still pending${details})`,
             );
         },
 
@@ -83,6 +95,7 @@ export function createRequestTracker(context) {
             context.off('request', onRequest);
             context.off('requestfinished', onRequestDone);
             context.off('requestfailed', onRequestDone);
+            pendingRequests.clear();
         },
     };
 }
@@ -93,20 +106,21 @@ export function createRequestTracker(context) {
  *
  * @param {BrowserContext} context Browser context used by the packer.
  * @param {Page} page Localization-tool page.
+ * @param {ProgressReporter} progress Shared progress/logging reporter.
  * @returns {void}
  */
-export function installBrowserLogging(context, page) {
+export function installBrowserLogging(context, page, progress) {
     context.on('requestfailed', (request) => {
         const failure = request.failure();
 
-        console.error(
+        progress.error(
             `Request failed: ${request.method()} ${request.url()}`
             + ` (${failure?.errorText ?? 'unknown error'})`,
         );
     });
 
     page.on('pageerror', (error) => {
-        console.error(`Page error: ${error.message}`);
+        progress.error(`Page error: ${error.message}`);
     });
 
     page.on('console', (message) => {
@@ -124,11 +138,14 @@ export function installBrowserLogging(context, page) {
         }
 
         const prefix = type.slice(0, 3).toUpperCase();
+        const output = url.length > 0
+            ? `${prefix} ${text} (${url})`
+            : `${prefix} ${text}`;
 
-        console.log(
-            url.length > 0
-                ? `${prefix} ${text} (${url})`
-                : `${prefix} ${text}`,
-        );
+        if (type === 'error') {
+            progress.error(output);
+        } else {
+            progress.log(output);
+        }
     });
 }
