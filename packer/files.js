@@ -8,7 +8,7 @@ import path from 'node:path';
  * @returns {Promise<void>}
  */
 export async function ensureDirectory(directory) {
-	await mkdir(directory, { recursive: true });
+    await mkdir(directory, { recursive: true });
 }
 
 /**
@@ -19,8 +19,8 @@ export async function ensureDirectory(directory) {
  * @returns {Promise<void>}
  */
 export async function writeTextFile(filename, contents) {
-	await ensureDirectory(path.dirname(filename));
-	await writeFile(filename, contents, 'utf8');
+    await ensureDirectory(path.dirname(filename));
+    await writeFile(filename, contents, 'utf8');
 }
 
 /**
@@ -31,8 +31,8 @@ export async function writeTextFile(filename, contents) {
  * @returns {Promise<void>}
  */
 export async function writeBinaryFile(filename, contents) {
-	await ensureDirectory(path.dirname(filename));
-	await writeFile(filename, contents);
+    await ensureDirectory(path.dirname(filename));
+    await writeFile(filename, contents);
 }
 
 /**
@@ -43,19 +43,19 @@ export async function writeBinaryFile(filename, contents) {
  * @returns {string}
  */
 export function resolveOutputPath(root, relativePath) {
-	const resolvedRoot = path.resolve(root);
-	const resolvedPath = path.resolve(resolvedRoot, relativePath);
-	const relative = path.relative(resolvedRoot, resolvedPath);
+    const resolvedRoot = path.resolve(root);
+    const resolvedPath = path.resolve(resolvedRoot, relativePath);
+    const relative = path.relative(resolvedRoot, resolvedPath);
 
-	if (
-		relative === '..'
-		|| relative.startsWith(`..${path.sep}`)
-		|| path.isAbsolute(relative)
-	) {
-		throw new Error(
-			`Output path escapes destination directory: ${relativePath}`,
-		);
-	}
+    if (
+        relative === '..'
+        || relative.startsWith(`..${path.sep}`)
+        || path.isAbsolute(relative)
+    ) {
+        throw new Error(
+            `Output path escapes destination directory: ${relativePath}`,
+        );
+    }
 
-	return resolvedPath;
+    return resolvedPath;
 }

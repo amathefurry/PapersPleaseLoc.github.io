@@ -1,6 +1,6 @@
 import {
-	createReadStream,
-	createWriteStream,
+    createReadStream,
+    createWriteStream,
 } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -20,38 +20,38 @@ import JSZip from 'jszip';
  * @returns {Promise<void>}
  */
 async function addDirectory(zip, root, directory) {
-	const entries = await readdir(directory, {
-		withFileTypes: true,
-	});
+    const entries = await readdir(directory, {
+        withFileTypes: true,
+    });
 
-	// Keep archive entry ordering deterministic across filesystems.
-	entries.sort((a, b) => a.name.localeCompare(b.name));
+    // Keep archive entry ordering deterministic across filesystems.
+    entries.sort((a, b) => a.name.localeCompare(b.name));
 
-	for (const entry of entries) {
-		const filename = path.join(directory, entry.name);
+    for (const entry of entries) {
+        const filename = path.join(directory, entry.name);
 
-		if (entry.isDirectory()) {
-			await addDirectory(zip, root, filename);
-			continue;
-		}
+        if (entry.isDirectory()) {
+            await addDirectory(zip, root, filename);
+            continue;
+        }
 
-		// Ignore unusual filesystem entries such as sockets or device files.
-		if (!entry.isFile()) {
-			continue;
-		}
+        // Ignore unusual filesystem entries such as sockets or device files.
+        if (!entry.isFile()) {
+            continue;
+        }
 
-		const archivePath = path
-			.relative(root, filename)
-			.split(path.sep)
-			.join('/');
+        const archivePath = path
+            .relative(root, filename)
+            .split(path.sep)
+            .join('/');
 
-		// Stream source files into JSZip instead of reading every file into
-		// memory before archive generation.
-		zip.file(
-			archivePath,
-			createReadStream(filename),
-		);
-	}
+        // Stream source files into JSZip instead of reading every file into
+        // memory before archive generation.
+        zip.file(
+            archivePath,
+            createReadStream(filename),
+        );
+    }
 }
 
 /**
@@ -65,24 +65,24 @@ async function addDirectory(zip, root, directory) {
  * @returns {Promise<void>}
  */
 export async function makeZip(directory, outputFilename) {
-	const zip = new JSZip();
+    const zip = new JSZip();
 
-	await addDirectory(
-		zip,
-		directory,
-		directory,
-	);
+    await addDirectory(
+        zip,
+        directory,
+        directory,
+    );
 
-	const archive = zip.generateNodeStream({
-		streamFiles: true,
-		compression: 'DEFLATE',
-		compressionOptions: {
-			level: 6,
-		},
-	});
+    const archive = zip.generateNodeStream({
+        streamFiles: true,
+        compression: 'DEFLATE',
+        compressionOptions: {
+            level: 6,
+        },
+    });
 
-	await pipeline(
-		archive,
-		createWriteStream(outputFilename),
-	);
+    await pipeline(
+        archive,
+        createWriteStream(outputFilename),
+    );
 }

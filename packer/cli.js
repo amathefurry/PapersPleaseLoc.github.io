@@ -2,22 +2,22 @@
 import { parseArgs } from 'node:util';
 
 const USAGE
-	= 'Usage: node packer '
-	+ '--csv <input Loc.csv file> '
-	+ '--url <loc tool url> '
-	+ '--out <output directory>';
+    = 'Usage: node packer '
+    + '--csv <input Loc.csv file> '
+    + '--url <loc tool url> '
+    + '--out <output directory>';
 
 /**
  * Error caused by invalid command-line usage.
  */
 export class UsageError extends Error {
-	/**
-	 * @param {string} message Error message.
-	 */
-	constructor(message) {
-		super(message);
-		this.name = 'UsageError';
-	}
+    /**
+     * @param {string} message Error message.
+     */
+    constructor(message) {
+        super(message);
+        this.name = 'UsageError';
+    }
 }
 
 /**
@@ -35,39 +35,39 @@ export class UsageError extends Error {
  * @returns {CliArgs}
  */
 export function parseCliArgs(argv = process.argv.slice(2)) {
-	const { values } = parseArgs({
-		args: argv,
-		options: {
-			csv: {
-				type: 'string',
-			},
-			url: {
-				type: 'string',
-			},
-			out: {
-				type: 'string',
-			},
-			makeFonts: {
-				type: 'boolean',
-				default: false,
-			},
-		},
-		strict: true,
-		allowPositionals: false,
-	});
+    const { values } = parseArgs({
+        args: argv,
+        options: {
+            csv: {
+                type: 'string',
+            },
+            url: {
+                type: 'string',
+            },
+            out: {
+                type: 'string',
+            },
+            makeFonts: {
+                type: 'boolean',
+                default: false,
+            },
+        },
+        strict: true,
+        allowPositionals: false,
+    });
 
-	if (
-		!values.csv
-		|| !values.url
-		|| !values.out
-	) {
-		throw new UsageError(USAGE);
-	}
+    if (
+        !values.csv
+        || !values.url
+        || !values.out
+    ) {
+        throw new UsageError(USAGE);
+    }
 
-	return {
-		csv: values.csv,
-		url: values.url,
-		out: values.out,
-		makeFonts: values.makeFonts,
-	};
+    return {
+        csv: values.csv,
+        url: values.url,
+        out: values.out,
+        makeFonts: values.makeFonts,
+    };
 }

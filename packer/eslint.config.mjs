@@ -1,134 +1,112 @@
-/* eslint-disable n/no-unpublished-import */
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
 import node from 'eslint-plugin-n';
 import promise from 'eslint-plugin-promise';
 import unicorn from 'eslint-plugin-unicorn';
 
-import {
-	defineConfig,
-	globalIgnores,
-} from 'eslint/config';
+import { globalIgnores } from 'eslint/config';
 
-export default defineConfig([
-	globalIgnores([
-		'node_modules/**',
-		'coverage/**',
-		'dist/**',
-		'build/**',
-		'__tmp__/**',
-	]),
+const sourceFiles = ['**/*.{js,mjs}'];
 
-	{
-		files: ['**/*.{js,cjs,mjs}'],
+export default [
+    globalIgnores([
+        'node_modules/**',
+        'coverage/**',
+        'dist/**',
+        'build/**',
+        '__tmp__/**',
+    ]),
 
-		plugins: {
-			js,
-			n: node,
-			promise,
-			unicorn,
-		},
+    {
+        ...js.configs.recommended,
+        files: sourceFiles,
+    },
 
-		extends: [
-			'js/recommended',
-			'n/recommended',
-			'promise/flat/recommended',
-			'unicorn/unopinionated',
+    {
+        ...node.configs['flat/recommended-module'],
+        files: sourceFiles,
+    },
 
-			stylistic.configs.customize({
-				indent: 'tab',
-				quotes: 'single',
-				semi: true,
-				jsx: false,
-				braceStyle: 'stroustrup',
-				quoteProps: 'as-needed',
-			}),
-		],
+    {
+        ...promise.configs['flat/recommended'],
+        files: sourceFiles,
+    },
 
-		languageOptions: {
-			ecmaVersion: 'latest',
-		},
+    {
+        ...unicorn.configs.unopinionated,
+        files: sourceFiles,
+    },
 
-		linterOptions: {
-			reportUnusedDisableDirectives: 'error',
-			reportUnusedInlineConfigs: 'error',
-		},
+    {
+        ...stylistic.configs.customize({
+            indent: 4,
+            quotes: 'single',
+            commaDangle: 'only-multiline',
+            semi: true,
+            jsx: false,
+            braceStyle: '1tbs',
+            quoteProps: 'as-needed',
+        }),
+        files: sourceFiles,
+    },
 
-		rules: {
-			/*
-			 * Correctness
-			 */
-			curly: ['error', 'all'],
+    {
+        files: sourceFiles,
 
-			eqeqeq: [
-				'error',
-				'always',
-				{
-					null: 'ignore',
-				},
-			],
+        languageOptions: {
+            ecmaVersion: 'latest',
+            sourceType: 'module',
+        },
 
-			'no-shadow': 'error',
+        linterOptions: {
+            reportUnusedDisableDirectives: 'error',
+            reportUnusedInlineConfigs: 'error',
+        },
 
-			'no-use-before-define': [
-				'error',
-				{
-					functions: false,
-					classes: true,
-					variables: true,
-				},
-			],
+        rules: {
+            curly: ['error', 'all'],
+            eqeqeq: ['error', 'always'],
 
-			'no-unused-vars': [
-				'error',
-				{
-					args: 'after-used',
-					argsIgnorePattern: '^_',
-					caughtErrors: 'all',
-					caughtErrorsIgnorePattern: '^_',
-					ignoreRestSiblings: true,
-				},
-			],
+            'no-shadow': 'error',
 
-			/*
-			 * Modern JavaScript
-			 */
-			'no-var': 'error',
-			'object-shorthand': 'error',
-			'prefer-const': 'error',
-			'prefer-object-has-own': 'error',
+            'no-use-before-define': [
+                'error',
+                {
+                    functions: false,
+                    classes: true,
+                    variables: true,
+                },
+            ],
 
-			/*
-			 * Node
-			 */
-			'n/prefer-node-protocol': 'error',
+            'no-unused-vars': [
+                'error',
+                {
+                    args: 'after-used',
+                    argsIgnorePattern: '^_',
+                    caughtErrors: 'all',
+                    caughtErrorsIgnorePattern: '^_',
+                    ignoreRestSiblings: true,
+                },
+            ],
 
-			/*
-			 * This is a command-line/build utility.
-			 */
-			'no-console': 'off',
-			'n/no-process-exit': 'off',
-			'n/no-sync': 'off',
-			'unicorn/no-process-exit': 'off',
-			'unicorn/prefer-module': 'error',
-		},
-	},
+            'no-var': 'error',
+            'object-shorthand': 'error',
+            'prefer-const': 'error',
+            'prefer-object-has-own': 'error',
 
-	/*
-	 * index.js is Node code, but functions passed to page.evaluate()
-	 * execute inside Playwright's browser context.
-	 *
-	 * Don't enable all browser globals for the entire project.
-	 */
-	{
-		files: ['index.js'],
+            'n/prefer-node-protocol': 'error',
 
-		languageOptions: {
-			globals: {
-				$: 'readonly',
-				FileReader: 'readonly',
-				window: 'readonly',
-			},
-		},
-	},
-]);
+            'no-console': 'off',
+
+            'unicorn/prefer-module': 'error',
+        },
+    },
+
+    {
+        files: ['eslint.config.mjs'],
+
+        rules: {
+            'n/no-unpublished-import': 'off',
+        },
+    },
+];

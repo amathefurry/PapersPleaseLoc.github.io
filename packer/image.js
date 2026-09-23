@@ -50,11 +50,11 @@ const LAB_KAPPA = 24_389 / 27;
  * @returns {number}
  */
 function linearizeSrgb(channel) {
-	const normalized = channel / 255;
+    const normalized = channel / 255;
 
-	return normalized <= 0.04045
-		? normalized / 12.92
-		: ((normalized + 0.055) / 1.055) ** 2.4;
+    return normalized <= 0.04045
+        ? normalized / 12.92
+        : ((normalized + 0.055) / 1.055) ** 2.4;
 }
 
 /**
@@ -64,9 +64,9 @@ function linearizeSrgb(channel) {
  * @returns {number}
  */
 function labTransform(value) {
-	return value > LAB_EPSILON
-		? Math.cbrt(value)
-		: (LAB_KAPPA * value + 16) / 116;
+    return value > LAB_EPSILON
+        ? Math.cbrt(value)
+        : (LAB_KAPPA * value + 16) / 116;
 }
 
 /**
@@ -76,23 +76,23 @@ function labTransform(value) {
  * @returns {LAB}
  */
 function rgbToLab([red, green, blue]) {
-	const r = linearizeSrgb(red) * 100;
-	const g = linearizeSrgb(green) * 100;
-	const b = linearizeSrgb(blue) * 100;
+    const r = linearizeSrgb(red) * 100;
+    const g = linearizeSrgb(green) * 100;
+    const b = linearizeSrgb(blue) * 100;
 
-	const x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / D65_X;
-	const y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / D65_Y;
-	const z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / D65_Z;
+    const x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / D65_X;
+    const y = (r * 0.2126 + g * 0.7152 + b * 0.0722) / D65_Y;
+    const z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / D65_Z;
 
-	const fx = labTransform(x);
-	const fy = labTransform(y);
-	const fz = labTransform(z);
+    const fx = labTransform(x);
+    const fy = labTransform(y);
+    const fz = labTransform(z);
 
-	return [
-		116 * fy - 16,
-		500 * (fx - fy),
-		200 * (fy - fz),
-	];
+    return [
+        116 * fy - 16,
+        500 * (fx - fy),
+        200 * (fy - fz),
+    ];
 }
 
 /**
@@ -104,23 +104,22 @@ function rgbToLab([red, green, blue]) {
  * @returns {void}
  */
 function fixImageAlpha(image) {
-	const data = image.bitmap.data;
+    const data = image.bitmap.data;
 
-	for (const { idx } of image.scanIterator()) {
-		const red = data[idx];
-		const green = data[idx + 1];
-		const blue = data[idx + 2];
+    for (const { idx } of image.scanIterator()) {
+        const red = data[idx];
+        const green = data[idx + 1];
+        const blue = data[idx + 2];
 
-		if (red === 255 && green === 0 && blue === 255) {
-			data[idx + 3] = 0;
-		}
-		else if (red === 127 && green === 0 && blue === 127) {
-			data[idx] = 0;
-			data[idx + 1] = 0;
-			data[idx + 2] = 0;
-			data[idx + 3] = 127;
-		}
-	}
+        if (red === 255 && green === 0 && blue === 255) {
+            data[idx + 3] = 0;
+        } else if (red === 127 && green === 0 && blue === 127) {
+            data[idx] = 0;
+            data[idx + 1] = 0;
+            data[idx + 2] = 0;
+            data[idx + 3] = 127;
+        }
+    }
 }
 
 /**
@@ -133,61 +132,61 @@ function fixImageAlpha(image) {
  * @returns {void}
  */
 function quantizeImage(image, rect, colors) {
-	if (colors.length === 0) {
-		throw new Error('Cannot quantize an image region with an empty palette');
-	}
+    if (colors.length === 0) {
+        throw new Error('Cannot quantize an image region with an empty palette');
+    }
 
-	if (rect.width <= 0 || rect.height <= 0) {
-		return;
-	}
+    if (rect.width <= 0 || rect.height <= 0) {
+        return;
+    }
 
-	const paletteLab = colors.map(rgbToLab);
-	const data = image.bitmap.data;
+    const paletteLab = colors.map(rgbToLab);
+    const data = image.bitmap.data;
 
-	// Captured pixel art contains many repeated RGB values. Cache their Lab
-	// conversion so each distinct source color is converted at most once.
-	/** @type {Map<number, LAB>} */
-	const labCache = new Map();
+    // Captured pixel art contains many repeated RGB values. Cache their Lab
+    // conversion so each distinct source color is converted at most once.
+    /** @type {Map<number, LAB>} */
+    const labCache = new Map();
 
-	for (const { idx } of image.scanIterator(
-		rect.x,
-		rect.y,
-		rect.width,
-		rect.height,
-	)) {
-		const red = data[idx];
-		const green = data[idx + 1];
-		const blue = data[idx + 2];
-		const rgbKey = (red << 16) | (green << 8) | blue;
+    for (const { idx } of image.scanIterator(
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+    )) {
+        const red = data[idx];
+        const green = data[idx + 1];
+        const blue = data[idx + 2];
+        const rgbKey = (red << 16) | (green << 8) | blue;
 
-		let pixelLab = labCache.get(rgbKey);
+        let pixelLab = labCache.get(rgbKey);
 
-		if (pixelLab === undefined) {
-			pixelLab = rgbToLab([red, green, blue]);
-			labCache.set(rgbKey, pixelLab);
-		}
+        if (pixelLab === undefined) {
+            pixelLab = rgbToLab([red, green, blue]);
+            labCache.set(rgbKey, pixelLab);
+        }
 
-		let nearestIndex = 0;
-		let nearestDistanceSquared = Infinity;
+        let nearestIndex = 0;
+        let nearestDistanceSquared = Infinity;
 
-		for (let index = 0; index < paletteLab.length; index++) {
-			const deltaL = paletteLab[index][0] - pixelLab[0];
-			const deltaA = paletteLab[index][1] - pixelLab[1];
-			const deltaB = paletteLab[index][2] - pixelLab[2];
-			const distanceSquared = deltaL * deltaL + deltaA * deltaA + deltaB * deltaB;
+        for (let index = 0; index < paletteLab.length; index++) {
+            const deltaL = paletteLab[index][0] - pixelLab[0];
+            const deltaA = paletteLab[index][1] - pixelLab[1];
+            const deltaB = paletteLab[index][2] - pixelLab[2];
+            const distanceSquared = deltaL * deltaL + deltaA * deltaA + deltaB * deltaB;
 
-			// Comparing squared distances avoids an unnecessary square root
-			// while preserving exactly the same nearest-color ordering.
-			if (distanceSquared < nearestDistanceSquared) {
-				nearestDistanceSquared = distanceSquared;
-				nearestIndex = index;
-			}
-		}
+            // Comparing squared distances avoids an unnecessary square root
+            // while preserving exactly the same nearest-color ordering.
+            if (distanceSquared < nearestDistanceSquared) {
+                nearestDistanceSquared = distanceSquared;
+                nearestIndex = index;
+            }
+        }
 
-		data[idx] = colors[nearestIndex][0];
-		data[idx + 1] = colors[nearestIndex][1];
-		data[idx + 2] = colors[nearestIndex][2];
-	}
+        data[idx] = colors[nearestIndex][0];
+        data[idx + 1] = colors[nearestIndex][1];
+        data[idx + 2] = colors[nearestIndex][2];
+    }
 }
 
 /**
@@ -198,44 +197,44 @@ function quantizeImage(image, rect, colors) {
  * @returns {void}
  */
 function autocropImage(image) {
-	const data = image.bitmap.data;
+    const data = image.bitmap.data;
 
-	let minX = image.width;
-	let minY = image.height;
-	let maxX = -1;
-	let maxY = -1;
+    let minX = image.width;
+    let minY = image.height;
+    let maxX = -1;
+    let maxY = -1;
 
-	for (const { x, y, idx } of image.scanIterator()) {
-		if (data[idx + 3] <= 1) {
-			continue;
-		}
+    for (const { x, y, idx } of image.scanIterator()) {
+        if (data[idx + 3] <= 1) {
+            continue;
+        }
 
-		minX = Math.min(minX, x);
-		minY = Math.min(minY, y);
-		maxX = Math.max(maxX, x);
-		maxY = Math.max(maxY, y);
-	}
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+    }
 
-	// No visible pixels, or no border to remove.
-	if (
-		maxX < minX
-		|| maxY < minY
-		|| (
-			minX === 0
-			&& minY === 0
-			&& maxX === image.width - 1
-			&& maxY === image.height - 1
-		)
-	) {
-		return;
-	}
+    // No visible pixels, or no border to remove.
+    if (
+        maxX < minX
+        || maxY < minY
+        || (
+            minX === 0
+            && minY === 0
+            && maxX === image.width - 1
+            && maxY === image.height - 1
+        )
+    ) {
+        return;
+    }
 
-	image.crop({
-		x: minX,
-		y: minY,
-		w: maxX - minX + 1,
-		h: maxY - minY + 1,
-	});
+    image.crop({
+        x: minX,
+        y: minY,
+        w: maxX - minX + 1,
+        h: maxY - minY + 1,
+    });
 }
 
 /**
@@ -246,12 +245,12 @@ function autocropImage(image) {
  * @returns {Rect}
  */
 function scaleRect(rect, scale) {
-	return {
-		x: rect.x * scale,
-		y: rect.y * scale,
-		width: rect.width * scale,
-		height: rect.height * scale,
-	};
+    return {
+        x: rect.x * scale,
+        y: rect.y * scale,
+        width: rect.width * scale,
+        height: rect.height * scale,
+    };
 }
 
 /**
@@ -264,77 +263,77 @@ function scaleRect(rect, scale) {
  * @returns Newly allocated downscaled Jimp image.
  */
 function downscale(image, step) {
-	if (!Number.isInteger(step) || step < 1) {
-		throw new RangeError(
-			`Downscale factor must be a positive integer, got ${step}`,
-		);
-	}
+    if (!Number.isInteger(step) || step < 1) {
+        throw new RangeError(
+            `Downscale factor must be a positive integer, got ${step}`,
+        );
+    }
 
-	if (image.width % step !== 0 || image.height % step !== 0) {
-		throw new RangeError(
-			`Image size ${image.width}x${image.height} is not divisible `
-			+ `by downscale factor ${step}`,
-		);
-	}
+    if (image.width % step !== 0 || image.height % step !== 0) {
+        throw new RangeError(
+            `Image size ${image.width}x${image.height} is not divisible `
+            + `by downscale factor ${step}`,
+        );
+    }
 
-	const output = new Jimp({
-		width: image.width / step,
-		height: image.height / step,
-		color: 0x00_00_00_00,
-	});
+    const output = new Jimp({
+        width: image.width / step,
+        height: image.height / step,
+        color: 0x00_00_00_00,
+    });
 
-	const sourceData = image.bitmap.data;
-	const outputData = output.bitmap.data;
+    const sourceData = image.bitmap.data;
+    const outputData = output.bitmap.data;
 
-	// Reuse one map for every output pixel rather than allocating a new map for
-	// every source block.
-	/** @type {Map<number, number>} */
-	const colorCounts = new Map();
+    // Reuse one map for every output pixel rather than allocating a new map for
+    // every source block.
+    /** @type {Map<number, number>} */
+    const colorCounts = new Map();
 
-	for (let outputY = 0; outputY < output.height; outputY++) {
-		for (let outputX = 0; outputX < output.width; outputX++) {
-			colorCounts.clear();
+    for (let outputY = 0; outputY < output.height; outputY++) {
+        for (let outputX = 0; outputX < output.width; outputX++) {
+            colorCounts.clear();
 
-			let bestColor = 0;
-			let bestCount = 0;
+            let bestColor = 0;
+            let bestCount = 0;
 
-			const sourceY0 = outputY * step;
-			const sourceX0 = outputX * step;
+            const sourceY0 = outputY * step;
+            const sourceX0 = outputX * step;
 
-			for (let sourceY = sourceY0; sourceY < sourceY0 + step; sourceY++) {
-				for (let sourceX = sourceX0; sourceX < sourceX0 + step; sourceX++) {
-					const sourceIndex = (sourceY * image.width + sourceX) * 4;
+            for (let sourceY = sourceY0; sourceY < sourceY0 + step; sourceY++) {
+                for (let sourceX = sourceX0; sourceX < sourceX0 + step; sourceX++) {
+                    const sourceIndex = (sourceY * image.width + sourceX) * 4;
 
-					// Force the packed RGBA value to unsigned 32-bit form so the
-					// high red bit cannot turn the map key into a negative number.
-					const color = (
-						(sourceData[sourceIndex] << 24)
-						| (sourceData[sourceIndex + 1] << 16)
-						| (sourceData[sourceIndex + 2] << 8)
-						| sourceData[sourceIndex + 3]
-					) >>> 0;
+                    // Force the packed RGBA value to unsigned 32-bit form so the
+                    // high red bit cannot turn the map key into a negative number.
+                    const color = (
+                        (sourceData[sourceIndex] << 24)
+                        | (sourceData[sourceIndex + 1] << 16)
+                        | (sourceData[sourceIndex + 2] << 8)
+                        | sourceData[sourceIndex + 3]
+                    ) >>> 0;
 
-					const count = (colorCounts.get(color) ?? 0) + 1;
-					colorCounts.set(color, count);
+                    const count = (colorCounts.get(color) ?? 0) + 1;
+                    colorCounts.set(color, count);
 
-					if (count > bestCount) {
-						bestColor = color;
-						bestCount = count;
-					}
-				}
-			}
+                    if (count > bestCount) {
+                        bestColor = color;
+                        bestCount = count;
+                    }
+                }
+            }
 
-			const outputIndex
-				= (outputY * output.width + outputX) * 4;
+            const outputIndex
+                = (outputY * output.width + outputX) * 4;
 
-			outputData[outputIndex] = bestColor >>> 24;
-			outputData[outputIndex + 1] = (bestColor >>> 16) & 0xFF;
-			outputData[outputIndex + 2] = (bestColor >>> 8) & 0xFF;
-			outputData[outputIndex + 3] = bestColor & 0xFF;
-		}
-	}
+            outputData[outputIndex] = bestColor >>> 24;
+            outputData[outputIndex + 1] = (bestColor >>> 16) & 0xFF;
+            outputData[outputIndex + 2] = (bestColor >>> 8) & 0xFF;
+            outputData[outputIndex + 3] = bestColor & 0xFF;
+        }
+    }
 
-	return output;
+    return output;
 }
 
 /**
@@ -352,65 +351,65 @@ function downscale(image, step) {
  * @returns {Promise<void>}
  */
 export async function finalizeImage(
-	filename,
-	width,
-	height,
-	quantizeRects,
-	wantAutoCrop,
+    filename,
+    width,
+    height,
+    quantizeRects,
+    wantAutoCrop,
 ) {
-	if (width <= 0 || height <= 0) {
-		throw new RangeError(
-			`Invalid logical image size ${width}x${height} for ${filename}`,
-		);
-	}
+    if (width <= 0 || height <= 0) {
+        throw new RangeError(
+            `Invalid logical image size ${width}x${height} for ${filename}`,
+        );
+    }
 
-	const image = await Jimp.read(filename);
+    const image = await Jimp.read(filename);
 
-	// Determine the screenshot scale before cropping can change the dimensions.
-	const scaleX = image.width / width;
-	const scaleY = image.height / height;
+    // Determine the screenshot scale before cropping can change the dimensions.
+    const scaleX = image.width / width;
+    const scaleY = image.height / height;
 
-	if (
-		scaleX !== scaleY
-		|| !Number.isInteger(scaleX)
-		|| scaleX < 1
-	) {
-		throw new Error(
-			`Unexpected capture size ${image.width}x${image.height} for `
-			+ `${width}x${height} logical image ${filename}`,
-		);
-	}
+    if (
+        scaleX !== scaleY
+        || !Number.isInteger(scaleX)
+        || scaleX < 1
+    ) {
+        throw new Error(
+            `Unexpected capture size ${image.width}x${image.height} for `
+            + `${width}x${height} logical image ${filename}`,
+        );
+    }
 
-	const captureScale = scaleX;
+    const captureScale = scaleX;
 
-	// Quantization rectangles are expressed relative to the uncropped image.
-	for (const { rect, colors } of quantizeRects) {
-		quantizeImage(
-			image,
-			scaleRect(rect, captureScale),
-			colors,
-		);
-	}
+    // Quantization rectangles are expressed relative to the uncropped image.
+    for (const { rect, colors } of quantizeRects) {
+        quantizeImage(
+            image,
+            scaleRect(rect, captureScale),
+            colors,
+        );
+    }
 
-	if (wantAutoCrop) {
-		autocropImage(image);
-	}
+    if (wantAutoCrop) {
+        autocropImage(image);
+    }
 
-	// Convert 0xff00ff to transparent and 0x7f007f to a 50% black shadow.
-	fixImageAlpha(image);
+    // Convert 0xff00ff to transparent and 0x7f007f to a 50% black shadow.
+    fixImageAlpha(image);
 
-	const outputFilename
-		/** @type {`${string}.${string}`} */ = (filename);
+    const outputFilename
+    /** @type {`${string}.${string}`} */ = (filename);
 
-	if (captureScale > 1) {
-		const output = downscale(image, captureScale);
-		await output.write(
-			/** @type {`${string}.${string}`} */(outputFilename),
-		);
-		return;
-	}
+    if (captureScale > 1) {
+        const output = downscale(image, captureScale);
+        await output.write(
+            /** @type {`${string}.${string}`} */(outputFilename),
+        );
+        return;
+    }
 
-	await image.write(
-		/** @type {`${string}.${string}`} */(outputFilename),
-	);
+    await image.write(
+    /** @type {`${string}.${string}`} */(outputFilename),
+    );
 }

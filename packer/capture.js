@@ -1,9 +1,9 @@
 import path from 'node:path';
 import {
-	ensureDirectory,
-	resolveOutputPath,
-	writeBinaryFile,
-	writeTextFile,
+    ensureDirectory,
+    resolveOutputPath,
+    writeBinaryFile,
+    writeTextFile,
 } from './files.js';
 import { finalizeImage } from './image.js';
 
@@ -78,15 +78,15 @@ import { finalizeImage } from './image.js';
  * response is unsuccessful.
  */
 async function loadBinaryAtUrl(page, url) {
-	const bytes = await page.evaluate(async (resourceUrl) => {
-		const response = await fetch(resourceUrl);
+    const bytes = await page.evaluate(async (resourceUrl) => {
+        const response = await fetch(resourceUrl);
 
-		return response.ok ? [...new Uint8Array(await response.arrayBuffer())] : null;
-	}, url);
+        return response.ok ? [...new Uint8Array(await response.arrayBuffer())] : null;
+    }, url);
 
-	return bytes === null
-		? null
-		: Buffer.from(bytes);
+    return bytes === null
+        ? null
+        : Buffer.from(bytes);
 }
 
 /**
@@ -96,24 +96,24 @@ async function loadBinaryAtUrl(page, url) {
  * @returns {Buffer} Decoded binary data.
  */
 function decodeDataUrl(dataUrl) {
-	const commaIndex = dataUrl.indexOf(',');
+    const commaIndex = dataUrl.indexOf(',');
 
-	if (commaIndex === -1) {
-		throw new Error('Invalid data URL');
-	}
+    if (commaIndex === -1) {
+        throw new Error('Invalid data URL');
+    }
 
-	const metadata = dataUrl.slice(0, commaIndex);
+    const metadata = dataUrl.slice(0, commaIndex);
 
-	// The capture tool currently emits base64 data URLs. Reject other encodings
-	// rather than silently interpreting their payload as base64.
-	if (!metadata.endsWith(';base64')) {
-		throw new Error('Unsupported data URL encoding');
-	}
+    // The capture tool currently emits base64 data URLs. Reject other encodings
+    // rather than silently interpreting their payload as base64.
+    if (!metadata.endsWith(';base64')) {
+        throw new Error('Unsupported data URL encoding');
+    }
 
-	return Buffer.from(
-		dataUrl.slice(commaIndex + 1),
-		'base64',
-	);
+    return Buffer.from(
+        dataUrl.slice(commaIndex + 1),
+        'base64',
+    );
 }
 
 /**
@@ -125,44 +125,44 @@ function decodeDataUrl(dataUrl) {
  * @returns {Promise<void>}
  */
 async function writeDataFile(page, outputDir, dataFile) {
-	// Browser-provided filenames are constrained to the language-pack root before
-	// touching the filesystem.
-	const filename = resolveOutputPath(
-		outputDir,
-		dataFile.filename,
-	);
+    // Browser-provided filenames are constrained to the language-pack root before
+    // touching the filesystem.
+    const filename = resolveOutputPath(
+        outputDir,
+        dataFile.filename,
+    );
 
-	switch (dataFile.dataType) {
-		case 'url': {
-			const data = await loadBinaryAtUrl(
-				page,
-				dataFile.contents,
-			);
+    switch (dataFile.dataType) {
+        case 'url': {
+            const data = await loadBinaryAtUrl(
+                page,
+                dataFile.contents,
+            );
 
-			if (data === null) {
-				throw new Error(
-					`Failed to load ${dataFile.contents}`,
-				);
-			}
+            if (data === null) {
+                throw new Error(
+                    `Failed to load ${dataFile.contents}`,
+                );
+            }
 
-			await writeBinaryFile(filename, data);
-			break;
-		}
+            await writeBinaryFile(filename, data);
+            break;
+        }
 
-		case 'dataURL':
-			await writeBinaryFile(
-				filename,
-				decodeDataUrl(dataFile.contents),
-			);
-			break;
+        case 'dataURL':
+            await writeBinaryFile(
+                filename,
+                decodeDataUrl(dataFile.contents),
+            );
+            break;
 
-		default:
-			await writeTextFile(
-				filename,
-				dataFile.contents,
-			);
-			break;
-	}
+        default:
+            await writeTextFile(
+                filename,
+                dataFile.contents,
+            );
+            break;
+    }
 }
 
 /**
@@ -176,46 +176,46 @@ async function writeDataFile(page, outputDir, dataFile) {
  * @returns {Promise<void>}
  */
 async function captureImage(
-	page,
-	scale,
-	outputDir,
-	image,
+    page,
+    scale,
+    outputDir,
+    image,
 ) {
-	const filename = resolveOutputPath(
-		outputDir,
-		image.filename,
-	);
+    const filename = resolveOutputPath(
+        outputDir,
+        image.filename,
+    );
 
-	await ensureDirectory(
-		path.dirname(filename),
-	);
+    await ensureDirectory(
+        path.dirname(filename),
+    );
 
-	// Isolation changes shared page state, so captures intentionally remain
-	// sequential rather than running several screenshots in parallel.
-	await page.evaluate((imageId) => {
-		const browser = /** @type {CaptureGlobal} */ (globalThis);
+    // Isolation changes shared page state, so captures intentionally remain
+    // sequential rather than running several screenshots in parallel.
+    await page.evaluate((imageId) => {
+        const browser = /** @type {CaptureGlobal} */ (globalThis);
 
-		browser.$.capture.isolate(imageId);
-	}, image.id);
+        browser.$.capture.isolate(imageId);
+    }, image.id);
 
-	await page.screenshot({
-		path: filename,
-		clip: {
-			x: 0,
-			y: 0,
-			width: scale * image.w,
-			height: scale * image.h,
-		},
-		omitBackground: true,
-	});
+    await page.screenshot({
+        path: filename,
+        clip: {
+            x: 0,
+            y: 0,
+            width: scale * image.w,
+            height: scale * image.h,
+        },
+        omitBackground: true,
+    });
 
-	await finalizeImage(
-		filename,
-		image.w,
-		image.h,
-		image.quantizeRects,
-		image.wantAutoCrop,
-	);
+    await finalizeImage(
+        filename,
+        image.w,
+        image.h,
+        image.quantizeRects,
+        image.wantAutoCrop,
+    );
 }
 
 /**
@@ -227,10 +227,10 @@ async function captureImage(
  * @returns {string}
  */
 function formatProgress(name, index, count) {
-	return (
-		`[${name} `
-		+ `${String(index + 1).padStart(3)}/${count}]`
-	);
+    return (
+        `[${name} `
+        + `${String(index + 1).padStart(3)}/${count}]`
+    );
 }
 
 /**
@@ -241,100 +241,100 @@ function formatProgress(name, index, count) {
  * @returns {Promise<string>} Language identifier reported by the capture tool.
  */
 export async function capture({
-	page,
-	waitForIdle,
-	scale,
-	makeFonts,
-	outputDir,
-	csv,
+    page,
+    waitForIdle,
+    scale,
+    makeFonts,
+    outputDir,
+    csv,
 }) {
-	console.log('Preparing page');
+    console.log('Preparing page');
 
-	const load = /** @type {CaptureLoadResult} */ (
-		await page.evaluate((csvContents) => {
-			const browser = /** @type {CaptureGlobal} */ (globalThis);
+    const load = /** @type {CaptureLoadResult} */ (
+        await page.evaluate((csvContents) => {
+            const browser = /** @type {CaptureGlobal} */ (globalThis);
 
-			return browser.$.capture.load(csvContents);
-		}, csv)
-	);
+            return browser.$.capture.load(csvContents);
+        }, csv)
+    );
 
-	if (load.error !== undefined) {
-		throw new Error(load.error);
-	}
+    if (load.error !== undefined) {
+        throw new Error(load.error);
+    }
 
-	// Resources requested by `load()` must finish before capture initialization.
-	await waitForIdle();
+    // Resources requested by `load()` must finish before capture initialization.
+    await waitForIdle();
 
-	const begin = /** @type {CaptureBeginResult} */ (
-		await page.evaluate((args) => {
-			const browser = /** @type {CaptureGlobal} */ (globalThis);
+    const begin = /** @type {CaptureBeginResult} */ (
+        await page.evaluate((args) => {
+            const browser = /** @type {CaptureGlobal} */ (globalThis);
 
-			return browser.$.capture.begin(
-				args.scale,
-				args.makeFonts,
-			);
-		}, { scale, makeFonts })
-	);
+            return browser.$.capture.begin(
+                args.scale,
+                args.makeFonts,
+            );
+        }, { scale, makeFonts })
+    );
 
-	if (begin.error !== undefined) {
-		throw new Error(begin.error);
-	}
+    if (begin.error !== undefined) {
+        throw new Error(begin.error);
+    }
 
-	console.log(`Language: ${begin.lang}`);
-	console.log(
-		`Packing ${begin.images.length} images `
-		+ `and ${begin.dataFiles.length} data files`,
-	);
+    console.log(`Language: ${begin.lang}`);
+    console.log(
+        `Packing ${begin.images.length} images `
+        + `and ${begin.dataFiles.length} data files`,
+    );
 
-	for (const [
-		index,
-		dataFile,
-	] of begin.dataFiles.entries()) {
-		console.log(
-			`${formatProgress(
-				'Data   ',
-				index,
-				begin.dataFiles.length,
-			)} ${dataFile.filename}`,
-		);
+    for (const [
+        index,
+        dataFile,
+    ] of begin.dataFiles.entries()) {
+        console.log(
+            `${formatProgress(
+                'Data   ',
+                index,
+                begin.dataFiles.length,
+            )} ${dataFile.filename}`,
+        );
 
-		await writeDataFile(
-			page,
-			outputDir,
-			dataFile,
-		);
-	}
+        await writeDataFile(
+            page,
+            outputDir,
+            dataFile,
+        );
+    }
 
-	for (const [
-		index,
-		image,
-	] of begin.images.entries()) {
-		let flags = '';
+    for (const [
+        index,
+        image,
+    ] of begin.images.entries()) {
+        let flags = '';
 
-		if (image.quantizeRects.length > 0) {
-			flags += ' PAL';
-		}
+        if (image.quantizeRects.length > 0) {
+            flags += ' PAL';
+        }
 
-		if (image.baked) {
-			flags += ' BAKED';
-		}
+        if (image.baked) {
+            flags += ' BAKED';
+        }
 
-		console.log(
-			`${formatProgress(
-				'Image',
-				index,
-				begin.images.length,
-			)} ${image.filename} `
-			+ `(${image.w}x${image.h})${flags}`,
-		);
+        console.log(
+            `${formatProgress(
+                'Image',
+                index,
+                begin.images.length,
+            )} ${image.filename} `
+            + `(${image.w}x${image.h})${flags}`,
+        );
 
-		await captureImage(
-			page,
-			scale,
-			outputDir,
-			image,
-		);
-	}
+        await captureImage(
+            page,
+            scale,
+            outputDir,
+            image,
+        );
+    }
 
-	return begin.lang;
+    return begin.lang;
 }
