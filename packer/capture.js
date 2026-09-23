@@ -22,7 +22,7 @@ import { finalizeImage } from './image.js';
  */
 
 /**
- * A binary file that must be downloaded from a URL.
+ * A binary file referenced by URL.
  *
  * @typedef {object} CaptureUrlFile
  * @property {string} filename Destination path relative to the language-pack root.
@@ -49,11 +49,11 @@ import { finalizeImage } from './image.js';
  * @typedef {object} CaptureImage
  * @property {string} id DOM identifier of the capture element.
  * @property {string} filename Destination path relative to the language-pack root.
- * @property {number} w Logical image width before capture scaling.
- * @property {number} h Logical image height before capture scaling.
- * @property {QuantizeRect[]} quantizeRects Regions that require palette quantization.
+ * @property {number} w Logical image width.
+ * @property {number} h Logical image height.
+ * @property {QuantizeRect[]} quantizeRects Regions requiring palette quantization.
  * @property {boolean} wantAutoCrop Whether transparent borders should be cropped.
- * @property {boolean} baked Whether the image comes from baked resources.
+ * @property {boolean} baked Whether the image comes from baked game resources.
  */
 
 /**
@@ -63,6 +63,7 @@ import { finalizeImage } from './image.js';
 
 /**
  * @typedef {object} CaptureBeginResult
+ * @property {string=} error Error reported while preparing the capture.
  * @property {string} lang Language identifier.
  * @property {CaptureImage[]} images Images to capture.
  * @property {CaptureDataFile[]} dataFiles Additional files to write.
@@ -74,6 +75,7 @@ import { finalizeImage } from './image.js';
  * @typedef {object} CaptureApi
  * @property {(csv: string) => CaptureLoadResult} load
  * @property {(scale: number, makeFonts: boolean) => CaptureBeginResult} begin
+ * @property {(imageId: string) => void} isolate
  */
 
 /**
@@ -92,15 +94,15 @@ import { finalizeImage } from './image.js';
  * @property {number} scale Capture scale applied by the web application.
  * @property {boolean} makeFonts Whether bitmap-font assets should be generated.
  * @property {string} outputDir Language-pack output directory.
- * @property {string} csv Contents of the input Loc.csv file.
+ * @property {string} csv Contents of Loc.csv.
  * @property {ProgressReporter} progress Progress reporter.
  */
 
 /**
  * Imports a localization into the browser-side capture tool.
  *
- * @param {Page} page Playwright page containing the localization tool.
- * @param {string} csv Contents of Loc.csv.
+ * @param {Page} page
+ * @param {string} csv
  * @returns {Promise<CaptureLoadResult>}
  */
 async function loadLocalization(page, csv) {
@@ -114,13 +116,14 @@ async function loadLocalization(page, csv) {
 }
 
 /**
- * Prepares the page for capture and retrieves the generated asset metadata.
+ * Prepares the localized page for capture.
  *
- * `begin()` also applies the requested CSS capture scale to the page.
+ * The browser-side implementation also applies the requested CSS zoom used
+ * when rasterizing game assets.
  *
- * @param {Page} page Playwright page containing the localization tool.
- * @param {number} scale Capture scale.
- * @param {boolean} makeFonts Whether bitmap fonts should be generated.
+ * @param {Page} page
+ * @param {number} scale
+ * @param {boolean} makeFonts
  * @returns {Promise<CaptureBeginResult>}
  */
 async function beginCapture(page, scale, makeFonts) {
@@ -137,14 +140,32 @@ async function beginCapture(page, scale, makeFonts) {
 }
 
 /**
+ * Moves a capture element into the browser-side capture position.
+ *
+ * The original renderer relies on this before taking a fixed-size screenshot.
+ *
+ * @param {Page} page
+ * @param {string} imageId
+ * @returns {Promise<void>}
+ */
+async function isolateCapture(page, imageId) {
+    await page.evaluate((id) => {
+        const browser = /** @type {CaptureGlobal} */ (globalThis);
+
+        browser.$.capture.isolate(id);
+    }, imageId);
+}
+
+/**
  * Downloads a resource using Playwright's request context.
  *
- * The request context shares cookies with the page's BrowserContext, while
- * returning the response body directly as a Node.js Buffer.
+ * Unlike fetching inside `page.evaluate()`, this returns the response body
+ * directly as a Node.js Buffer without serializing every byte through the
+ * browser boundary.
  *
- * @param {Page} page Playwright page containing the localization tool.
- * @param {string} url Resource URL, absolute or relative to the current page.
- * @returns {Promise<Buffer>} Resource contents.
+ * @param {Page} page
+ * @param {string} url
+ * @returns {Promise<Buffer>}
  */
 async function fetchResource(page, url) {
     const resourceUrl = new URL(url, page.url()).href;
@@ -167,8 +188,8 @@ async function fetchResource(page, url) {
 /**
  * Decodes a base64 data URL.
  *
- * @param {string} dataUrl Base64 data URL.
- * @returns {Buffer} Decoded contents.
+ * @param {string} dataUrl
+ * @returns {Buffer}
  */
 function decodeDataUrl(dataUrl) {
     const match = /^data:[^,]*;base64,(.*)$/s.exec(dataUrl);
@@ -183,64 +204,89 @@ function decodeDataUrl(dataUrl) {
 /**
  * Writes a file produced by the browser-side capture tool.
  *
- * @param {Page} page Playwright page containing the localization tool.
- * @param {string} outputDir Language-pack output directory.
- * @param {CaptureDataFile} dataFile Generated file description.
+ * @param {Page} page
+ * @param {string} outputDir
+ * @param {CaptureDataFile} dataFile
  * @returns {Promise<void>}
  */
 async function writeDataFile(page, outputDir, dataFile) {
+    const {
+        filename: relativeFilename,
+        dataType,
+    } = dataFile;
+
     const filename = resolveOutputPath(
         outputDir,
-        dataFile.filename,
+        relativeFilename,
     );
 
-    switch (dataFile.dataType) {
+    switch (dataType) {
+        case undefined:
+            await writeTextFile(
+                filename,
+                dataFile.contents,
+            );
+            break;
+
         case 'url':
             await writeBinaryFile(
                 filename,
                 await fetchResource(page, dataFile.contents),
             );
-            return;
+            break;
 
         case 'dataURL':
             await writeBinaryFile(
                 filename,
                 decodeDataUrl(dataFile.contents),
             );
-            return;
+            break;
 
         default:
-            await writeTextFile(
-                filename,
-                dataFile.contents,
+            throw new Error(
+                `Unsupported data type for ${relativeFilename}: `
+                + String(dataType),
             );
     }
 }
 
 /**
- * Captures one rendered image and performs its final image processing.
+ * Captures one rendered game asset and performs its final image processing.
  *
- * The web application has already applied `scale` through its CSS zoom before
- * this function is called. Playwright therefore captures the element at its
- * rendered dimensions rather than requiring a manually scaled clip rectangle.
+ * The dimensions returned by `$.capture.begin()` are the authoritative logical
+ * dimensions of the asset. The renderer uses CSS `zoom`, so the screenshot is
+ * clipped explicitly to `scale * width` by `scale * height` rather than using
+ * Playwright's inferred element bounds.
  *
- * @param {Page} page Playwright page containing the localization tool.
- * @param {string} outputDir Language-pack output directory.
- * @param {CaptureImage} image Image description.
+ * @param {Page} page
+ * @param {number} scale
+ * @param {string} outputDir
+ * @param {CaptureImage} image
  * @returns {Promise<void>}
  */
-async function captureImage(page, outputDir, image) {
+async function captureImage(
+    page,
+    scale,
+    outputDir,
+    image,
+) {
     const filename = resolveOutputPath(
         outputDir,
         image.filename,
     );
 
     await ensureDirectory(path.dirname(filename));
+    await isolateCapture(page, image.id);
 
-    await page.locator(`#${image.id}.capture`).screenshot({
+    await page.screenshot({
         path: filename,
+        clip: {
+            x: 0,
+            y: 0,
+            width: scale * image.w,
+            height: scale * image.h,
+        },
         omitBackground: true,
-        scale: 'css',
     });
 
     await finalizeImage(
@@ -253,14 +299,13 @@ async function captureImage(page, outputDir, image) {
 }
 
 /**
- * Generates a complete Papers, Please localization package.
+ * Generates a complete localization package.
  *
- * The browser owns localization and rendering. The packer imports Loc.csv, asks
- * the browser for the assets that need to be generated, persists its data
- * files, captures its rendered images, and runs the required image
- * post-processing.
+ * The web application owns localization and rendering. This function drives
+ * that renderer through Playwright, writes its generated files, captures image
+ * assets, and performs the required image post-processing.
  *
- * @param {CaptureOptions} options Capture configuration.
+ * @param {CaptureOptions} options
  * @returns {Promise<string>} Language identifier reported by the capture tool.
  */
 export async function capture({
@@ -274,11 +319,6 @@ export async function capture({
 }) {
     progress.log('Preparing page');
 
-    /*
-     * Importing the localization can start asynchronous requests for baked
-     * images, fonts, and other resources. Wait until they have settled before
-     * asking the page which assets need to be captured.
-     */
     const load = await runAndWaitForIdle(
         () => loadLocalization(page, csv),
     );
@@ -287,15 +327,21 @@ export async function capture({
         throw new Error(load.error);
     }
 
-    const {
-        lang,
-        images,
-        dataFiles,
-    } = await beginCapture(
+    const result = await beginCapture(
         page,
         scale,
         makeFonts,
     );
+
+    if (result.error) {
+        throw new Error(result.error);
+    }
+
+    const {
+        lang,
+        images,
+        dataFiles,
+    } = result;
 
     progress.log(`Language: ${lang}`);
     progress.log(
@@ -325,10 +371,7 @@ export async function capture({
         images.length,
     );
 
-    /*
-     * Keep captures sequential. Every image is rendered from the same page and
-     * therefore shares the same DOM and rendering state.
-     */
+    // Each capture mutates the shared browser DOM through `isolate()`.
     for (const image of images) {
         const flags = [
             image.quantizeRects.length > 0 && 'PAL',
@@ -342,6 +385,7 @@ export async function capture({
 
         await captureImage(
             page,
+            scale,
             outputDir,
             image,
         );
