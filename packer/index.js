@@ -9,24 +9,16 @@ import { parseArgs } from 'node:util';
 import { ensureDirectory, resolveOutputPath, writeBinaryFile, writeTextFile } from './files.js';
 import { finalizeImage } from './image.js';
 import { makeZip } from './archive.js';
+import {
+	createRequestTracker,
+	installBrowserLogging,
+} from './browser.js';
 
 /**
  * @typedef {import('playwright').Page} Page
  * A Playwright page used to execute the localization capture code in the browser.
  */
 
-/**
- * @typedef {import('playwright').BrowserContext} BrowserContext
- */
-
-/**
- * @typedef {BrowserContext & {
- *   requestCount: number,
- *   requestsDone: () => Promise<void>,
- * }} TrackedBrowserContext
- * Browser context augmented with the request-tracking state installed by
- * {@link attachRequestTracker}.
- */
 
 /** @typedef {import('./image.js').QuantizeRect} QuantizeRect */
 /**
@@ -244,13 +236,21 @@ function progress(name, i, count) {
  * image elements, and post-processes them for the language pack.
  *
  * @param {Page} page Playwright page containing `$.capture`.
+ * @param {() => Promise<void>} waitForIdle Waits for browser resources to finish loading.
  * @param {number} scale Browser capture scale.
  * @param {boolean} makeFonts Whether font assets should be generated.
  * @param {string} dir Temporary language-pack output directory.
  * @param {string} csv Contents of the input Loc.csv file.
  * @returns {Promise<string>} Language identifier reported by the capture tool.
  */
-async function capture(page, scale, makeFonts, dir, csv) {
+async function capture(
+	page,
+	waitForIdle,
+	scale,
+	makeFonts,
+	dir,
+	csv,
+) {
 	console.log('Preparing page');
 
 	const load = /** @type {CaptureLoadResult} */ (
@@ -264,9 +264,7 @@ async function capture(page, scale, makeFonts, dir, csv) {
 		throw new Error(load.error);
 	}
 
-	const context = /** @type {TrackedBrowserContext} */ (page.context());
-
-	await context.requestsDone();
+	await waitForIdle();
 
 	const begin = /** @type {CaptureBeginResult} */ (
 		await page.evaluate((args) => {
@@ -341,39 +339,6 @@ function abortWithError(err) {
 	process.exit(1);
 }
 
-/**
- * Adds lightweight request accounting to a Playwright browser context. The
- * resulting `requestsDone()` helper resolves once all tracked requests have
- * either completed or failed.
- *
- * @param {TrackedBrowserContext} context Browser context to augment.
- * @returns {void}
- */
-function attachRequestTracker(context) {
-	context.requestCount = 0;
-	const requestTracker = {
-		request() {
-			context.requestCount++;
-		},
-		requestfailed() {
-			context.requestCount--;
-		},
-		requestfinished() {
-			context.requestCount--;
-		},
-	};
-
-	context.on('request', requestTracker.request);
-	context.on('requestfailed', requestTracker.requestfailed);
-	context.on('requestfinished', requestTracker.requestfinished);
-
-	context.requestsDone = async function () {
-		while (context.requestCount !== 0) {
-			await delay(10);
-		}
-	};
-}
-
 // Main
 const timerId = 'Finished in';
 console.time(timerId);
@@ -407,40 +372,11 @@ if (args.csv === undefined || args.url === undefined || args.out === undefined) 
 const url = args.url;
 
 const browser = await webkit.launch();
-const context = /** @type {TrackedBrowserContext} */ (await browser.newContext());
+const context = await browser.newContext();
 const page = await context.newPage();
 
-context.on('requestfailed', (request) => {
-	const failure = request.failure();
-
-	console.log(
-		`url: ${request.url()}, `
-		+ `errText: ${failure?.errorText ?? 'unknown'}, `
-		+ `method: ${request.method()}`,
-	);
-});
-
-page.on('pageerror', (error) => {
-	console.log(`Page error: ${error}`);
-});
-
-attachRequestTracker(context);
-
-page.on('console', (message) => {
-	const messageText = message.text();
-	const messageType = message.type().slice(0, 3).toUpperCase();
-	const messageUrl = message.location() ? message.location().url : '';
-
-	if (message.type() === 'error' && messageText.includes('404') && messageUrl.includes('/baked/')) {
-		// ignore 404 errors on baked images
-	}
-	else if (messageUrl.length > 0) {
-		console.log(`${messageType} ${messageText} (${messageUrl})`);
-	}
-	else {
-		console.log(`${messageType} ${messageText}`);
-	}
-});
+installBrowserLogging(context, page);
+const requestTracker = createRequestTracker(context);
 
 console.log('Opening page: ' + url);
 await page.goto(url);
@@ -465,7 +401,14 @@ catch (error) {
 	throw error;
 }
 
-const lang = await capture(page, 1, args.makeFonts, dir, csv);
+const lang = await capture(
+	page,
+	requestTracker.waitForIdle,
+	1,
+	args.makeFonts,
+	dir,
+	csv,
+);
 await browser.close();
 
 const zipFilename = path.join(args.out, lang + '.zip');
