@@ -9,6 +9,7 @@ import { finalizeImage } from './image.js';
 
 /** @typedef {import('playwright').Page} Page */
 /** @typedef {import('./image.js').QuantizeRect} QuantizeRect */
+/** @typedef {import('./progress.js').ProgressReporter} ProgressReporter */
 
 /**
  * @typedef {object} CaptureDataFile
@@ -64,6 +65,7 @@ import { finalizeImage } from './image.js';
  * @property {boolean} makeFonts Whether font assets should be generated.
  * @property {string} outputDir Temporary language-pack output directory.
  * @property {string} csv Contents of the input Loc.csv file.
+ * @property {ProgressReporter} progress Shared progress/logging reporter.
  */
 
 /**
@@ -81,7 +83,9 @@ async function loadBinaryAtUrl(page, url) {
     const bytes = await page.evaluate(async (resourceUrl) => {
         const response = await fetch(resourceUrl);
 
-        return response.ok ? [...new Uint8Array(await response.arrayBuffer())] : null;
+        return response.ok
+            ? [...new Uint8Array(await response.arrayBuffer())]
+            : null;
     }, url);
 
     return bytes === null
@@ -219,21 +223,6 @@ async function captureImage(
 }
 
 /**
- * Formats a compact progress prefix for console output.
- *
- * @param {string} name Operation label.
- * @param {number} index Zero-based item index.
- * @param {number} count Total number of items.
- * @returns {string}
- */
-function formatProgress(name, index, count) {
-    return (
-        `[${name} `
-        + `${String(index + 1).padStart(3)}/${count}]`
-    );
-}
-
-/**
  * Drives the browser-side capture API and writes the complete temporary
  * language-pack tree.
  *
@@ -247,8 +236,9 @@ export async function capture({
     makeFonts,
     outputDir,
     csv,
+    progress,
 }) {
-    console.log('Preparing page');
+    progress.log('Preparing page');
 
     const load = /** @type {CaptureLoadResult} */ (
         await page.evaluate((csvContents) => {
@@ -280,35 +270,28 @@ export async function capture({
         throw new Error(begin.error);
     }
 
-    console.log(`Language: ${begin.lang}`);
-    console.log(
+    progress.log(`Language: ${begin.lang}`);
+    progress.log(
         `Packing ${begin.images.length} images `
         + `and ${begin.dataFiles.length} data files`,
     );
 
-    for (const [
-        index,
-        dataFile,
-    ] of begin.dataFiles.entries()) {
-        console.log(
-            `${formatProgress(
-                'Data   ',
-                index,
-                begin.dataFiles.length,
-            )} ${dataFile.filename}`,
-        );
+    const dataProgress = progress.createTask(
+        'Data',
+        begin.dataFiles.length,
+    );
+    const imageProgress = progress.createTask(
+        'Image',
+        begin.images.length,
+    );
 
-        await writeDataFile(
-            page,
-            outputDir,
-            dataFile,
-        );
+    for (const dataFile of begin.dataFiles) {
+        dataProgress.start(dataFile.filename);
+        await writeDataFile(page, outputDir, dataFile);
+        dataProgress.complete();
     }
 
-    for (const [
-        index,
-        image,
-    ] of begin.images.entries()) {
+    for (const image of begin.images) {
         let flags = '';
 
         if (image.quantizeRects.length > 0) {
@@ -319,13 +302,8 @@ export async function capture({
             flags += ' BAKED';
         }
 
-        console.log(
-            `${formatProgress(
-                'Image',
-                index,
-                begin.images.length,
-            )} ${image.filename} `
-            + `(${image.w}x${image.h})${flags}`,
+        imageProgress.start(
+            `${image.filename} (${image.w}x${image.h})${flags}`,
         );
 
         await captureImage(
@@ -334,6 +312,7 @@ export async function capture({
             outputDir,
             image,
         );
+        imageProgress.complete();
     }
 
     return begin.lang;
