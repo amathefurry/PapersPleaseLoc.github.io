@@ -6,29 +6,125 @@ import {
 	writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
-import Jimp from 'jimp';
+import { Jimp } from 'jimp';
 import { webkit } from 'playwright';
-import {parseArgs} from 'node:util';
+import { parseArgs } from 'node:util';
 import JSZip from 'jszip';
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * @typedef {import('playwright').Page} Page
+ * A Playwright page used to execute the localization capture code in the browser.
+ */
+
+/**
+ * @typedef {import('playwright').BrowserContext} BrowserContext
+ */
+
+/**
+ * @typedef {BrowserContext & {
+ *   requestCount: number,
+ *   requestsDone: () => Promise<void>,
+ * }} TrackedBrowserContext
+ * Browser context augmented with the request-tracking state installed by
+ * {@link attachRequestTracker}.
+ */
+
+/** @typedef {import('jimp').Jimp} JimpImage */
+/** @typedef {InstanceType<typeof JSZip>} JSZipArchive */
+
+/** @typedef {[number, number, number]} RGB */
+/** @typedef {[number, number, number]} XYZ */
+/** @typedef {[number, number, number]} LAB */
+
+/**
+ * @typedef {object} Rect
+ * @property {number} x Left coordinate in pixels.
+ * @property {number} y Top coordinate in pixels.
+ * @property {number} width Rectangle width in pixels.
+ * @property {number} height Rectangle height in pixels.
+ */
+
+/**
+ * @typedef {object} QuantizeRect
+ * @property {Rect} rect Region of the image that should be quantized.
+ * @property {RGB[]} colors Palette permitted inside the region.
+ */
+
+/**
+ * @typedef {object} CaptureDataFile
+ * @property {string} filename Destination path relative to the language-pack root.
+ * @property {string} dataType How `contents` should be interpreted.
+ * @property {string} contents Text, a data URL, or a remote URL depending on `dataType`.
+ */
+
+/**
+ * @typedef {object} CaptureImage
+ * @property {string} id Browser-side identifier used by `$.capture.isolate`.
+ * @property {string} filename Destination path relative to the language-pack root.
+ * @property {number} w Logical output width.
+ * @property {number} h Logical output height.
+ * @property {QuantizeRect[]} quantizeRects Regions that require palette quantization.
+ * @property {boolean} wantAutoCrop Whether transparent borders should be cropped.
+ * @property {boolean} baked Whether the image comes from the game's baked resources.
+ */
+
+/**
+ * @typedef {object} CaptureLoadResult
+ * @property {string=} error Capture-side error message, when loading failed.
+ */
+
+/**
+ * @typedef {object} CaptureBeginResult
+ * @property {string=} error Capture-side error message, when initialization failed.
+ * @property {string} lang Language identifier used for the resulting archive name.
+ * @property {CaptureImage[]} images Images that must be rendered and post-processed.
+ * @property {CaptureDataFile[]} dataFiles Additional files included in the language pack.
+ */
+
+/**
+ * Ensures that a directory exists, creating any missing parents as needed.
+ *
+ * @param {string} targetDir Directory path to create.
+ * @returns {Promise<void>}
+ */
 async function guaranteeDir(targetDir) {
 	await mkdir(targetDir, { recursive: true });
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Writes UTF-8 text after ensuring that the destination directory exists.
+ *
+ * @param {string} filename Destination filename.
+ * @param {string} contents Text to write.
+ * @returns {Promise<void>}
+ */
 async function writeUtf8File(filename, contents) {
 	await guaranteeDir(path.dirname(filename));
 	await writeFile(filename, contents, 'utf8');
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Writes binary data after ensuring that the destination directory exists.
+ *
+ * @param {string} filename Destination filename.
+ * @param {Buffer} contents Binary payload.
+ * @returns {Promise<void>}
+ */
 async function writeBinaryFile(filename, contents) {
 	await guaranteeDir(path.dirname(filename));
 	await writeFile(filename, contents);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Fetches a binary resource from inside the browser page and converts it to a
+ * Node.js Buffer. Fetching in the page preserves the same browser/session
+ * context as the localization tool.
+ *
+ * @param {Page} page Playwright page hosting the localization tool.
+ * @param {string} url Resource URL.
+ * @returns {Promise<Buffer | null>} Resource contents, or `null` for a failed
+ * HTTP response.
+ */
 async function loadBinaryAtUrl(page, url) {
 	// https://github.com/puppeteer/puppeteer/issues/3722
 	async function getBinaryAsString() {
@@ -54,9 +150,15 @@ async function loadBinaryAtUrl(page, url) {
 	return (str == null) ? null : Buffer.from(str, 'binary');
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Converts the game's chroma-key colors into their intended alpha values.
+ * Magenta (0xff00ff) becomes transparent and dark magenta (0x7f007f) becomes a
+ * 50% black shadow.
+ *
+ * @param {JimpImage} image Image to modify in place.
+ * @returns {Promise<void>}
+ */
 async function fixImageAlpha(image) {
-	// convert 0xff00ff -> transparent and 0x800080 -> shadow
 	await image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, i) {
 		const r = this.bitmap.data[i + 0];
 		const g = this.bitmap.data[i + 1];
@@ -77,15 +179,29 @@ async function fixImageAlpha(image) {
 	});
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
 // http://stackoverflow.com/questions/15408522/rgb-to-xyz-and-lab-colours-conversion
+/**
+ * Converts an sRGB color to CIE L*a*b* through the D65 XYZ color space.
+ * L*a*b* distances are used by the palette quantizer because they more
+ * closely approximate perceptual color differences than raw RGB distances.
+ *
+ * @param {RGB} rgb RGB components in the range 0-255.
+ * @returns {LAB}
+ */
 function RGBtoLAB(rgb) {
 	// used for color quantization
 	const xyz = RGBtoXYZ(rgb[0], rgb[1], rgb[2]);
 	return XYZtoLAB(xyz[0], xyz[1], xyz[2]);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Converts an sRGB color to CIE XYZ using a 2° observer and D65 illuminant.
+ *
+ * @param {number} R Red component in the range 0-255.
+ * @param {number} G Green component in the range 0-255.
+ * @param {number} B Blue component in the range 0-255.
+ * @returns {XYZ}
+ */
 function RGBtoXYZ(R, G, B) {
 	// used for color quantization
 	var_R = Number.parseFloat(R / 255); // R from 0 to 255
@@ -107,7 +223,14 @@ function RGBtoXYZ(R, G, B) {
 	return [X, Y, Z];
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Converts a CIE XYZ color to CIE L*a*b* using the D65 reference white.
+ *
+ * @param {number} x CIE X component.
+ * @param {number} y CIE Y component.
+ * @param {number} z CIE Z component.
+ * @returns {LAB}
+ */
 function XYZtoLAB(x, y, z) {
 	// used for color quantization
 	const ref_X = 95.047;
@@ -129,7 +252,15 @@ function XYZtoLAB(x, y, z) {
 	return [CIE_L, CIE_a, CIE_b];
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Quantizes a rectangular image region to the nearest color in a fixed palette.
+ * Distance is measured in CIE L*a*b* space.
+ *
+ * @param {JimpImage} image Image to modify in place.
+ * @param {Rect} rect Region to quantize.
+ * @param {RGB[]} colors Allowed RGB palette.
+ * @returns {Promise<void>}
+ */
 async function quantizeImage(image, rect, colors) {
 	// quantize pixels in rect to available colors
 	const palLab = [];
@@ -161,6 +292,13 @@ async function quantizeImage(image, rect, colors) {
 	});
 }
 
+/**
+ * Crops transparent borders while preserving every pixel whose alpha is greater
+ * than 1. The image is modified in place.
+ *
+ * @param {JimpImage} image Image to crop.
+ * @returns {void}
+ */
 function autocropImage(image) {
 	// image.crop( x, y, w, h );
 	let x0 = 10_000;
@@ -183,10 +321,27 @@ function autocropImage(image) {
 	if (x1 > x0 && y1 > y0) { image.crop(x0, y0, x1 - x0 + 1, y1 - y0 + 1); }
 }
 
+/**
+ * Scales a rectangle by a uniform factor.
+ *
+ * @param {Rect} rect Rectangle to scale.
+ * @param {number} scale Uniform scale factor.
+ * @returns {Rect}
+ */
 function scaleRect(rect, scale) {
 	return { x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale };
 }
 
+/**
+ * Downscales an image by selecting the most common RGBA color from each `step`
+ * by `step` source block. This preserves hard-edged pixel-art palettes better
+ * than interpolation.
+ *
+ * @param {JimpImage} image Source image.
+ * @param {number} step Number of source pixels represented by one output pixel
+ * on each axis.
+ * @returns {JimpImage} Newly allocated downscaled image.
+ */
 function downscale(image, step) {
 	const downscaledImage = new Jimp(image.bitmap.width / step, image.bitmap.height / step, (err, image) => {
 		// this image is 256 x 256, every pixel is set to 0x00000000
@@ -223,7 +378,18 @@ function downscale(image, step) {
 	return downscaledImage;
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Applies the complete post-processing pipeline to a captured image: optional
+ * cropping, palette quantization, alpha-key conversion, and pixel-art downscaling.
+ * The processed image replaces the file on disk.
+ *
+ * @param {string} filename Captured image path.
+ * @param {number} width Intended logical width.
+ * @param {number} height Intended logical height.
+ * @param {QuantizeRect[]} quantizeRects Palette-constrained image regions.
+ * @param {boolean} wantAutoCrop Whether transparent borders should be removed.
+ * @returns {Promise<void>}
+ */
 async function finalizeImage(filename, width, height, quantizeRects, wantAutoCrop) {
 	// load and shrink
 	let image = await new Promise(function (resolve, reject) {
@@ -259,7 +425,14 @@ async function finalizeImage(filename, width, height, quantizeRects, wantAutoCro
 	await image.write(filename);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Formats a compact progress prefix for console output.
+ *
+ * @param {string} name Operation label.
+ * @param {number} i Zero-based item index.
+ * @param {number} count Total number of items.
+ * @returns {string}
+ */
 function progress(name, i, count) {
 	let si = (i + 1).toString();
 	while (si.length < 3) { si = ' ' + si; }
@@ -268,7 +441,15 @@ function progress(name, i, count) {
 	return '[' + name + ' ' + si + '/' + sc + ']';
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Recursively adds files beneath `dir` to an archive. Archive entries always
+ * use forward slashes, independent of the host operating system.
+ *
+ * @param {string} root Root directory used to derive relative archive paths.
+ * @param {string} dir Directory currently being traversed.
+ * @param {JSZipArchive} zip Archive being populated.
+ * @returns {Promise<void>}
+ */
 async function addToZip(root, dir, zip) {
 	const entries = await readdir(dir, { withFileTypes: true });
 
@@ -285,7 +466,13 @@ async function addToZip(root, dir, zip) {
 	}
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Creates a ZIP archive containing the complete generated language-pack directory.
+ *
+ * @param {string} dir Directory to archive.
+ * @param {string} outputFilename ZIP filename to create.
+ * @returns {Promise<void>}
+ */
 async function makeZip(dir, outputFilename) {
 	const zip = new JSZip();
 	await addToZip(dir, dir, zip);
@@ -294,14 +481,17 @@ async function makeZip(dir, outputFilename) {
 	await writeFile(outputFilename, data);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-function sleep(ms) {
-	return new Promise((resolve) => {
-		setTimeout(resolve, ms);
-	});
-}
-
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Drives the browser-side capture API, writes all generated data files, captures
+ * image elements, and post-processes those images for the final language pack.
+ *
+ * @param {Page} page Playwright page containing `$.capture`.
+ * @param {number} scale Browser capture scale.
+ * @param {boolean} makeFonts Whether the capture tool should generate font assets.
+ * @param {string} dir Output directory for the temporary language-pack tree.
+ * @param {string} csv Contents of the input Loc.csv file.
+ * @returns {Promise<string>} Language identifier reported by the capture tool.
+ */
 async function capture(page, scale, makeFonts, dir, csv) {
 	console.log('Preparing page');
 
@@ -376,23 +566,39 @@ async function capture(page, scale, makeFonts, dir, csv) {
 	return begin.lang;
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
 process.on('unhandledRejection', (reason, p) => {
 	console.log('Unhandled Rejection at: Promise', p, 'reason:', reason);
 });
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Prints command-line usage and terminates the process with a failure status.
+ *
+ * @returns {never}
+ */
 function showUsage() {
 	console.log('Usage: node packer --csv <input Loc.csv file> --url <loc tool url> --out <output directory>');
 	process.exit(1);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Reports a fatal error and terminates the process.
+ *
+ * @param {unknown} err Error or diagnostic value to print.
+ * @returns {never}
+ */
 function abortWithError(err) {
 	console.error(err);
 	process.exit(1);
 }
 
+/**
+ * Adds lightweight request accounting to a Playwright browser context. The
+ * resulting `requestsDone()` helper resolves once all tracked requests have
+ * either completed or failed.
+ *
+ * @param {TrackedBrowserContext} context Browser context to augment.
+ * @returns {void}
+ */
 function attachRequestTracker(context) {
 	context.requestCount = 0;
 	const requestTracker = {
@@ -416,9 +622,7 @@ function attachRequestTracker(context) {
 	};
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
 // Main
-// ---------------------------------------------------------------------------------------------------------------------
 (async function () {
 	const timerId = 'Finished in';
 	console.time(timerId);
@@ -450,7 +654,7 @@ function attachRequestTracker(context) {
 	const url = args.url;
 
 	const browser = await webkit.launch();
-	const context = await browser.newContext();
+	const context = /** @type {TrackedBrowserContext} */ await browser.newContext();
 
 	context.on('requestfailed', (request) => {
 		console.log(`url: ${request.url()}, errText: ${request.failure().errorText}, method: ${request.method()}`);
