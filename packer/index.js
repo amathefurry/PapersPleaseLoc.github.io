@@ -13,9 +13,11 @@ import {
 import { capture } from './capture.js';
 import {
     parseCliArgs,
+    USAGE,
     UsageError,
 } from './cli.js';
 import { ensureDirectory } from './files.js';
+import { createProgressReporter } from './progress.js';
 
 /**
  * Reads the localization CSV and adds a clearer error while preserving the
@@ -58,6 +60,7 @@ async function runCapture({
     outputDir,
     csv,
 }) {
+    const progress = createProgressReporter();
     const browser = await webkit.launch();
 
     /** @type {ReturnType<typeof createRequestTracker> | undefined} */
@@ -67,10 +70,10 @@ async function runCapture({
         const context = await browser.newContext();
         const page = await context.newPage();
 
-        installBrowserLogging(context, page);
+        installBrowserLogging(context, page, progress);
         requestTracker = createRequestTracker(context);
 
-        console.log(`Opening page: ${url}`);
+        progress.log(`Opening page: ${url}`);
         await page.goto(url);
 
         return await capture({
@@ -80,8 +83,10 @@ async function runCapture({
             makeFonts,
             outputDir,
             csv,
+            progress,
         });
     } finally {
+        progress.stop();
         requestTracker?.dispose();
         await browser.close();
     }
@@ -94,6 +99,11 @@ async function runCapture({
  */
 async function main() {
     const args = parseCliArgs();
+
+    if (args.help) {
+        console.log(USAGE);
+        return;
+    }
 
     const csvFilename = path.resolve(args.csv);
     const outputDir = path.resolve(args.out);
@@ -128,6 +138,8 @@ async function main() {
     console.log(`Zipping: ${zipFilename}`);
     await makeZip(tempDir, zipFilename);
 
+    // Keep a failed build's temporary tree for diagnosis, but remove it after a
+    // successful archive has been written.
     await rm(tempDir, {
         recursive: true,
         force: true,
