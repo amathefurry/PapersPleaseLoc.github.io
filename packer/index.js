@@ -10,7 +10,7 @@ import { Jimp } from 'jimp';
 import { webkit } from 'playwright';
 import { parseArgs } from 'node:util';
 import JSZip from 'jszip';
-import { ensureDirectory, writeBinaryFile, writeTextFile } from './files.js';
+import { ensureDirectory, resolveOutputPath, writeBinaryFile, writeTextFile } from './files.js';
 
 /**
  * @typedef {import('playwright').Page} Page
@@ -540,19 +540,21 @@ async function capture(page, scale, makeFonts, dir, csv) {
 	// write out all data files
 	for (let i = 0; i < dataFiles.length; i++) {
 		const dataFile = dataFiles[i];
+		const filename = resolveOutputPath(dir, dataFile.filename);
+
 		console.log(progress('Data   ', i, dataFiles.length) + ' ' + dataFile.filename);
 		if (dataFile.dataType === 'url') {
 			const data = await loadBinaryAtUrl(page, dataFile.contents);
 			if (data !== null) {
-				await writeBinaryFile(path.join(dir, dataFile.filename), data);
+				await writeBinaryFile(path.join(dir, filename), data);
 			}
 		}
 		else if (dataFile.dataType === 'dataURL') {
 			const buffer = Buffer.from(dataFile.contents.split(',', 2)[1], 'base64');
-			await writeBinaryFile(path.join(dir, dataFile.filename), buffer);
+			await writeBinaryFile(path.join(dir, filename), buffer);
 		}
 		else {
-			await writeTextFile(path.join(dir, dataFile.filename), dataFile.contents);
+			await writeTextFile(path.join(dir, filename), dataFile.contents);
 		}
 	}
 
@@ -566,7 +568,7 @@ async function capture(page, scale, makeFonts, dir, csv) {
 
 		console.log(progress('Image', i, images.length) + ' ' + image.filename + ' (' + image.w + 'x' + image.h + ')' + (image.quantizeRects.length ? ' PAL' : '') + (image.baked ? ' BAKED' : ''));
 
-		const filename = path.join(dir, image.filename);
+		const filename = resolveOutputPath(dir, image.filename);
 		await ensureDirectory(path.dirname(filename));
 
 		// isolate element and capture page

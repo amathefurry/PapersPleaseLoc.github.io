@@ -34,3 +34,28 @@ export async function writeBinaryFile(filename, contents) {
 	await ensureDirectory(path.dirname(filename));
 	await writeFile(filename, contents);
 }
+
+/**
+ * Resolves an output path while ensuring that it remains inside `root`.
+ *
+ * @param {string} root Root output directory.
+ * @param {string} relativePath Path relative to the root.
+ * @returns {string}
+ */
+export function resolveOutputPath(root, relativePath) {
+	const resolvedRoot = path.resolve(root);
+	const resolvedPath = path.resolve(resolvedRoot, relativePath);
+	const relative = path.relative(resolvedRoot, resolvedPath);
+
+	if (
+		relative === '..'
+		|| relative.startsWith(`..${path.sep}`)
+		|| path.isAbsolute(relative)
+	) {
+		throw new Error(
+			`Output path escapes destination directory: ${relativePath}`,
+		);
+	}
+
+	return resolvedPath;
+}
