@@ -1,16 +1,14 @@
 import {
 	readFile,
-	readdir,
 	rm,
-	writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { webkit } from 'playwright';
 import { parseArgs } from 'node:util';
-import JSZip from 'jszip';
 import { ensureDirectory, resolveOutputPath, writeBinaryFile, writeTextFile } from './files.js';
 import { finalizeImage } from './image.js';
+import { makeZip } from './archive.js';
 
 /**
  * @typedef {import('playwright').Page} Page
@@ -29,8 +27,6 @@ import { finalizeImage } from './image.js';
  * Browser context augmented with the request-tracking state installed by
  * {@link attachRequestTracker}.
  */
-
-/** @typedef {InstanceType<typeof JSZip>} JSZipArchive */
 
 /** @typedef {import('./image.js').QuantizeRect} QuantizeRect */
 /**
@@ -241,46 +237,6 @@ function progress(name, i, count) {
 	const sc = count.toString();
 	// while (sc.length < 3) sc = " " + sc;
 	return '[' + name + ' ' + si + '/' + sc + ']';
-}
-
-/**
- * Recursively adds files beneath `dir` to an archive. Archive entries always
- * use forward slashes, independent of the host operating system.
- *
- * @param {string} root Root directory used to derive relative archive paths.
- * @param {string} dir Directory currently being traversed.
- * @param {JSZipArchive} zip Archive being populated.
- * @returns {Promise<void>}
- */
-async function addToZip(root, dir, zip) {
-	const entries = await readdir(dir, { withFileTypes: true });
-
-	for (const entry of entries) {
-		const fullPath = path.join(dir, entry.name);
-
-		if (entry.isDirectory()) {
-			await addToZip(root, fullPath, zip);
-			continue;
-		}
-
-		const archivePath = path.relative(root, fullPath).split(path.sep).join('/');
-		zip.file(archivePath, await readFile(fullPath));
-	}
-}
-
-/**
- * Creates a ZIP archive containing the complete generated language-pack directory.
- *
- * @param {string} dir Directory to archive.
- * @param {string} outputFilename ZIP filename to create.
- * @returns {Promise<void>}
- */
-async function makeZip(dir, outputFilename) {
-	const zip = new JSZip();
-	await addToZip(dir, dir, zip);
-
-	const data = await zip.generateAsync({ type: 'nodebuffer' });
-	await writeFile(outputFilename, data);
 }
 
 /**
