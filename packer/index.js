@@ -78,7 +78,7 @@ async function runCapture({
 
         return await capture({
             page,
-            waitForIdle: requestTracker.waitForIdle,
+            runAndWaitForIdle: requestTracker.runAndWaitForIdle,
             scale: 1,
             makeFonts,
             outputDir,

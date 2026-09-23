@@ -60,7 +60,7 @@ import { finalizeImage } from './image.js';
 /**
  * @typedef {object} CaptureOptions
  * @property {Page} page Playwright page containing `$.capture`.
- * @property {() => Promise<void>} waitForIdle Waits for browser resources to finish loading.
+ * @property {<T>(operation: () => Promise<T>) => Promise<T>} runAndWaitForIdle Waits for browser resources to finish loading.
  * @property {number} scale Browser capture scale.
  * @property {boolean} makeFonts Whether font assets should be generated.
  * @property {string} outputDir Temporary language-pack output directory.
@@ -231,7 +231,7 @@ async function captureImage(
  */
 export async function capture({
     page,
-    waitForIdle,
+    runAndWaitForIdle,
     scale,
     makeFonts,
     outputDir,
@@ -241,19 +241,18 @@ export async function capture({
     progress.log('Preparing page');
 
     const load = /** @type {CaptureLoadResult} */ (
-        await page.evaluate((csvContents) => {
-            const browser = /** @type {CaptureGlobal} */ (globalThis);
+        await runAndWaitForIdle(
+            () => page.evaluate((csvContents) => {
+                const browser = /** @type {CaptureGlobal} */ (globalThis);
 
-            return browser.$.capture.load(csvContents);
-        }, csv)
+                return browser.$.capture.load(csvContents);
+            }, csv),
+        )
     );
 
     if (load.error !== undefined) {
         throw new Error(load.error);
     }
-
-    // Resources requested by `load()` must finish before capture initialization.
-    await waitForIdle();
 
     const begin = /** @type {CaptureBeginResult} */ (
         await page.evaluate((args) => {
