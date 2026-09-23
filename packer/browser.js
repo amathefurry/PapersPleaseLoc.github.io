@@ -73,16 +73,20 @@ export function createRequestTracker(context) {
                 await delay(10);
             }
 
-            const pendingUrls = [...pendingRequests]
-                .slice(0, 3)
+            const pending = [...pendingRequests];
+
+            const pendingUrls = pending
+                .slice(0, 5)
                 .map(request => request.url());
+
             const details = pendingUrls.length > 0
-                ? `: ${pendingUrls.join(', ')}`
+                ? `\n${pendingUrls.map(url => `  - ${url}`).join('\n')}`
                 : '';
 
             throw new Error(
-                `Timed out waiting for browser requests `
-                + `(${pendingRequests.size} still pending${details})`,
+                `Timed out waiting for ${pendingRequests.size} browser request`
+                + `${pendingRequests.size === 1 ? '' : 's'} to finish.`
+                + details,
             );
         },
 
@@ -119,6 +123,17 @@ export function installBrowserLogging(context, page, progress) {
         );
     });
 
+    context.on('response', (response) => {
+        if (response.ok()) {
+            return;
+        }
+
+        progress.error(
+            `HTTP ${response.status()} `
+            + `${response.request().method()} ${response.url()}`,
+        );
+    });
+
     page.on('pageerror', (error) => {
         progress.error(`Page error: ${error.message}`);
     });
@@ -128,11 +143,15 @@ export function installBrowserLogging(context, page, progress) {
         const type = message.type();
         const url = message.location().url ?? '';
 
-        // Missing baked images are expected and should not pollute the output.
         if (
             type === 'error'
-            && text.includes('404')
-            && url.includes('/baked/')
+            && (
+                text.includes('Failed to load resource')
+                || (
+                    text.includes('404')
+                    && url.includes('/baked/')
+                )
+            )
         ) {
             return;
         }
@@ -144,7 +163,8 @@ export function installBrowserLogging(context, page, progress) {
 
         if (type === 'error') {
             progress.error(output);
-        } else {
+        }
+        else {
             progress.log(output);
         }
     });
