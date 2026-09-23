@@ -3,7 +3,6 @@ import {
 	rm,
 } from 'node:fs/promises';
 import path from 'node:path';
-import { parseArgs } from 'node:util';
 import { webkit } from 'playwright';
 
 import { makeZip } from './archive.js';
@@ -12,58 +11,82 @@ import {
 	installBrowserLogging,
 } from './browser.js';
 import { capture } from './capture.js';
+import {
+	parseCliArgs,
+	UsageError,
+} from './cli.js';
 import { ensureDirectory } from './files.js';
 
-const USAGE = 'Usage: node packer --csv <input Loc.csv file> --url <loc tool url> --out <output directory>';
-
 /**
- * @typedef {object} CliArgs
- * @property {string} csv
- * @property {string} url
- * @property {string} out
- * @property {boolean} makeFonts
- */
-
-/**
- * Parses and validates command-line arguments.
+ * Reads the localization CSV and adds a clearer error while preserving the
+ * original filesystem error as its cause.
  *
- * @returns {CliArgs}
+ * @param {string} filename CSV filename.
+ * @returns {Promise<string>}
  */
-function parseCliArgs() {
-	const { values } = parseArgs({
-		options: {
-			csv: {
-				type: 'string',
-			},
-			url: {
-				type: 'string',
-			},
-			out: {
-				type: 'string',
-			},
-			makeFonts: {
-				type: 'boolean',
-				default: false,
-			},
-		},
-		strict: true,
-		allowPositionals: false,
-	});
-
-	if (
-		values.csv === undefined
-		|| values.url === undefined
-		|| values.out === undefined
-	) {
-		throw new Error(USAGE);
+async function readCsv(filename) {
+	try {
+		return await readFile(filename, 'utf8');
 	}
+	catch (error) {
+		const fileError = /** @type {NodeJS.ErrnoException} */ (error);
 
-	return {
-		csv: values.csv,
-		url: values.url,
-		out: values.out,
-		makeFonts: values.makeFonts,
-	};
+		if (fileError.code === 'ENOENT') {
+			throw new Error(
+				`File not found: ${filename}`,
+				{ cause: error },
+			);
+		}
+
+		throw error;
+	}
+}
+
+/**
+ * Runs the browser-backed capture stage and always releases its Playwright
+ * resources.
+ *
+ * @param {object} options Capture-stage options.
+ * @param {string} options.url Localization-tool URL.
+ * @param {boolean} options.makeFonts Whether font assets should be generated.
+ * @param {string} options.outputDir Temporary language-pack directory.
+ * @param {string} options.csv Input Loc.csv contents.
+ * @returns {Promise<string>} Captured language identifier.
+ */
+async function runCapture({
+	url,
+	makeFonts,
+	outputDir,
+	csv,
+}) {
+	const browser = await webkit.launch();
+
+	/** @type {ReturnType<typeof createRequestTracker> | undefined} */
+	let requestTracker;
+
+	try {
+		const context = await browser.newContext();
+		const page = await context.newPage();
+
+		installBrowserLogging(context, page);
+		requestTracker = createRequestTracker(context);
+
+		console.log(`Opening page: ${url}`);
+		await page.goto(url);
+
+		return await capture({
+			page,
+			waitForIdle: requestTracker.waitForIdle,
+			scale: 1,
+			makeFonts,
+			outputDir,
+			csv,
+		});
+	}
+	finally {
+		requestTracker?.dispose();
+		await browser.close();
+	}
 }
 
 /**
@@ -78,24 +101,7 @@ async function main() {
 	const outputDir = path.resolve(args.out);
 
 	console.log(`Loading csv from ${csvFilename}`);
-
-	let csv;
-
-	try {
-		csv = await readFile(csvFilename, 'utf8');
-	}
-	catch (error) {
-		const fileError = /** @type {NodeJS.ErrnoException} */ (error);
-
-		if (fileError.code === 'ENOENT') {
-			throw new Error(
-				`File not found: ${csvFilename}`,
-				{ cause: error },
-			);
-		}
-
-		throw error;
-	}
+	const csv = await readCsv(csvFilename);
 
 	const code = path.parse(csvFilename).name;
 	const tempDir = path.join(
@@ -107,42 +113,14 @@ async function main() {
 		recursive: true,
 		force: true,
 	});
-
-	// Ensure the temporary tree exists even if the capture happens to produce
-	// no files.
 	await ensureDirectory(tempDir);
 
-	const browser = await webkit.launch();
-
-	/** @type {ReturnType<typeof createRequestTracker> | undefined} */
-	let requestTracker;
-
-	let language;
-
-	try {
-		const context = await browser.newContext();
-		const page = await context.newPage();
-
-		installBrowserLogging(context, page);
-
-		requestTracker = createRequestTracker(context);
-
-		console.log(`Opening page: ${args.url}`);
-		await page.goto(args.url);
-
-		language = await capture({
-			page,
-			waitForIdle: requestTracker.waitForIdle,
-			scale: 1,
-			makeFonts: args.makeFonts,
-			outputDir: tempDir,
-			csv,
-		});
-	}
-	finally {
-		requestTracker?.dispose();
-		await browser.close();
-	}
+	const language = await runCapture({
+		url: args.url,
+		makeFonts: args.makeFonts,
+		outputDir: tempDir,
+		csv,
+	});
 
 	const zipFilename = path.join(
 		outputDir,
@@ -150,13 +128,8 @@ async function main() {
 	);
 
 	console.log(`Zipping: ${zipFilename}`);
+	await makeZip(tempDir, zipFilename);
 
-	await makeZip(
-		tempDir,
-		zipFilename,
-	);
-
-	// The temporary tree is no longer needed after a successful archive.
 	await rm(tempDir, {
 		recursive: true,
 		force: true,
@@ -171,11 +144,12 @@ try {
 	await main();
 }
 catch (error) {
-	console.error(
-		error instanceof Error
-			? error.message
-			: error,
-	);
+	if (error instanceof UsageError) {
+		console.error(error.message);
+	}
+	else {
+		console.error(error);
+	}
 
 	process.exitCode = 1;
 }
