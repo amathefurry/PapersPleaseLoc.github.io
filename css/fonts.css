@@ -40,17 +40,17 @@ Fonts here are used by both the loc tool and the game.
 .font-tiny { font-family: 'tiny'; font-size: 8px; line-height: 8px; }
 
 /*---- small -------------------------------------------------*/
-@font-face { font-family: 'small_tight'; src: url('../fonts/AtariSmall-U--misaki_gothic--88Zen.ttf'); }
+@font-face { font-family: 'small_tight'; src: url('../fonts/AtariSmall2.ttf'); }
 .font-small_tight { font-family: 'small_tight'; font-size: 8px; line-height: 8px; }
 
 @font-face { font-family: 'small_harsh'; src: url('../fonts/5mikropix--misaki_gothic.ttf'); }
 .font-small_harsh { font-family: 'small_harsh'; font-size: 8px; line-height: 9px; }
 
 /*---- regular -------------------------------------------------*/
-@font-face { font-family: 'regular'; src: url('../fonts/BMmini-U--88Zen--misaki_gothic.ttf'); }
+@font-face { font-family: 'regular'; src: url('../fonts/BMromania.ttf'); }
 .font-regular, body { font-family: 'regular'; font-size: 8px; line-height: 8px; }
 
-@font-face { font-family: 'regular_short'; src: url('../fonts/04B03-U--misaki_gothic.ttf'); }
+@font-face { font-family: 'regular_short'; src: url('../fonts/04B03-RO.ttf'); }
 .font-regular_short { font-family: 'regular_short'; font-size: 8px; line-height: 8px; }
 
 /*---- title -------------------------------------------------*/
@@ -88,7 +88,7 @@ Fonts below here are used only by the loc tool and don't appear in the game.
 .font-title_serif { font-family: 'title_serif'; font-size: 10px; line-height: 10px; }
 
 /*---- cursive -------------------------------------------------*/
-@font-face { font-family: 'cursive'; src: url('../fonts/Bangalor-U--elisat10.ttf'); }
+@font-face { font-family: 'cursive'; src: url('../fonts/Bangalro.ttf'); }
 .font-cursive { font-family: 'cursive'; font-size: 8px; line-height: 8px; }
 
 /*---- scribble -------------------------------------------------*/
